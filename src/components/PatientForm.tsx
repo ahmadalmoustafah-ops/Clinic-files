@@ -24,10 +24,11 @@ import { PatientRecord, PatientFollowUp, MedicalImage } from '../types';
 import { AutoResizeTextarea } from './AutoResizeTextarea';
 import { ImageModal } from './ImageModal';
 import { useLanguage } from '../context/LanguageContext';
+import { exportPatientToWord } from '../services/wordExportService';
 
 interface PatientFormProps {
   initialPatient?: PatientRecord | null;
-  onSave: (patient: PatientRecord) => void;
+  onSave: (patient: PatientRecord) => void | Promise<void>;
   onDelete?: (patientId: string) => void;
   onBack: () => void;
   autoAddFollowUp?: boolean;
@@ -95,6 +96,8 @@ export const PatientForm: React.FC<PatientFormProps> = ({
   const [activeTab, setActiveTab] = useState<'details' | 'followups' | 'images'>('details');
   const [selectedImage, setSelectedImage] = useState<MedicalImage | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastType, setToastType] = useState<'success' | 'warning'>('success');
+  const [isSavingWord, setIsSavingWord] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({
     history: false,
     clinical: false,
@@ -113,9 +116,10 @@ export const PatientForm: React.FC<PatientFormProps> = ({
     }
   }, [autoAddFollowUp]);
 
-  const showToast = (msg: string) => {
+  const showToast = (msg: string, type: 'success' | 'warning' = 'success') => {
+    setToastType(type);
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
+    setTimeout(() => setToastMessage(null), 3500);
   };
 
   const updateField = (field: keyof PatientRecord, val: any) => {
@@ -211,13 +215,24 @@ export const PatientForm: React.FC<PatientFormProps> = ({
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!patient.name.trim()) {
-      alert(language === 'ar' ? 'يرجى كتابة اسم المريض لحفظ الملف.' : 'Please enter patient name to save record.');
+      setActiveTab('details');
+      showToast(t.enterPatientNameWarning, 'warning');
       return;
     }
-    onSave(patient);
-    showToast(t.toastSavedPatient);
+
+    setIsSavingWord(true);
+    try {
+      await Promise.resolve(onSave(patient));
+      await exportPatientToWord(patient, language);
+      showToast(t.toastSavedAndWordExported, 'success');
+    } catch (err) {
+      console.error('Word export failed:', err);
+      showToast(t.toastWordExportError, 'warning');
+    } finally {
+      setIsSavingWord(false);
+    }
   };
 
   const handlePrint = () => {
@@ -230,8 +245,12 @@ export const PatientForm: React.FC<PatientFormProps> = ({
     <div className="flex flex-col min-h-full pb-20 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-emerald-600 text-white px-4 py-2.5 rounded-2xl shadow-xl text-xs font-semibold flex items-center gap-2 animate-in fade-in-50 zoom-in-95 duration-200 no-print">
-          <Sparkles className="w-4 h-4" />
+        <div
+          className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 ${
+            toastType === 'warning' ? 'bg-amber-600' : 'bg-emerald-600'
+          } text-white px-4 py-2.5 rounded-2xl shadow-xl text-xs font-semibold flex items-center gap-2 animate-in fade-in-50 zoom-in-95 duration-200 no-print max-w-[90%] text-center`}
+        >
+          <Sparkles className="w-4 h-4 shrink-0" />
           <span>{toastMessage}</span>
         </div>
       )}
@@ -286,10 +305,11 @@ export const PatientForm: React.FC<PatientFormProps> = ({
 
           <button
             onClick={handleSave}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-sky-600 hover:bg-sky-700 active:bg-sky-800 text-white text-xs font-bold rounded-xl shadow-xs transition-colors"
+            disabled={isSavingWord}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-sky-600 hover:bg-sky-700 active:bg-sky-800 disabled:opacity-60 text-white text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
           >
-            <Save className="w-4 h-4" />
-            <span>{t.saveFile}</span>
+            <Save className={`w-4 h-4 ${isSavingWord ? 'animate-spin' : ''}`} />
+            <span>{isSavingWord ? t.savingAndExportingWord : t.saveFile}</span>
           </button>
         </div>
       </header>

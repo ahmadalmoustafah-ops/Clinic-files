@@ -268,6 +268,10 @@ export const translations = {
 
     // Toasts & Messages
     toastSavedPatient: 'تم حفظ وتحديث ملف المريض بنجاح!',
+    toastSavedAndWordExported: 'تم حفظ الملف وتنزيل نسخة Word (.docx) على جهازك فوراً!',
+    toastWordExportError: 'تم حفظ الملف محلياً، تعذر تصدير ملف Word.',
+    savingAndExportingWord: 'جاري الحفظ وتنزيل Word...',
+    enterPatientNameWarning: 'يرجى كتابة اسم المريض لحفظ الملف وتنزيل نسخة Word.',
     toastDeletedPatient: 'تم حذف ملف المريض',
     toastImageAdded: 'تمت إضافة الصورة إلى الملف الطبي بنجاح',
     toastImageDeleted: 'تم حذف الصورة',
@@ -577,6 +581,10 @@ export const translations = {
 
     // Toasts & Messages
     toastSavedPatient: 'Patient file saved and updated successfully!',
+    toastSavedAndWordExported: 'File saved & Word (.docx) copy downloaded immediately!',
+    toastWordExportError: 'Record saved locally, failed to export Word file.',
+    savingAndExportingWord: 'Saving & Exporting Word...',
+    enterPatientNameWarning: 'Please enter the patient name to save and export Word.',
     toastDeletedPatient: 'Patient file deleted',
     toastImageAdded: 'Medical scan added successfully',
     toastImageDeleted: 'Photo deleted',
