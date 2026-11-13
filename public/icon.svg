@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="clinicGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0284c7" />
+      <stop offset="100%" stop-color="#0f766e" />
+    </linearGradient>
+    <linearGradient id="crossGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#f0f9ff" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#0369a1" flood-opacity="0.3" />
+    </filter>
+  </defs>
+  
+  <!-- App Icon Background (Squircle with 15% safe zone margin) -->
+  <rect width="512" height="512" rx="112" fill="url(#clinicGrad)" />
+  
+  <!-- Subtle Medical Grid Pattern -->
+  <circle cx="256" cy="256" r="180" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="4" />
+  <circle cx="256" cy="256" r="130" fill="none" stroke="#ffffff" stroke-opacity="0.06" stroke-width="2" />
+  
+  <!-- Centered Medical Cross with Rounded Corners -->
+  <g filter="url(#shadow)">
+    <!-- Vertical Bar -->
+    <rect x="220" y="140" width="72" height="232" rx="20" fill="url(#crossGrad)" />
+    <!-- Horizontal Bar -->
+    <rect x="140" y="220" width="232" height="72" rx="20" fill="url(#crossGrad)" />
+  </g>
+  
+  <!-- Pulse Line Accent inside Cross -->
+  <path d="M 180 256 L 225 256 L 242 225 L 260 287 L 275 245 L 287 256 L 332 256" 
+        fill="none" 
+        stroke="#0284c7" 
+        stroke-width="8" 
+        stroke-linecap="round" 
+        stroke-linejoin="round" />
+        
+  <!-- Subtle Stethoscope / Shield Emblem in Corner -->
+  <circle cx="256" cy="388" r="8" fill="#38bdf8" />
+  <circle cx="236" cy="388" r="4" fill="#38bdf8" opacity="0.6" />
+  <circle cx="276" cy="388" r="4" fill="#38bdf8" opacity="0.6" />
+</svg>

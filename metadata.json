@@ -1,0 +1,8 @@
+{
+  "name": "تطبيق عيادة الطبيب الذكي",
+  "description": "نظام أندرويد متكامل لإدارة العيادات الطبية، ملفات المرضى، المتابعات السريرية غير المحدودة، وجدولة المواعيد مع التنبيهات المسبقة.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
