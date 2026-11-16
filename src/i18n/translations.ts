@@ -364,6 +364,12 @@ export const translations = {
     designerBioDesc: 'صُمم تطبيق Easy clinic بعناية ليخدم الأطباء في عياداتهم، مع التركيز على سهولة تدوين السجل السريري للمريض، استيعاب المتابعات المتكررة بلا حدود، وحفظ البيانات محلياً بخصوصية وأمان تام دون الحاجة للإنترنت.',
     designerSpecialtyBadge: 'طب الجهاز الهضمي والكبد',
 
+    // Manager Notification & Account Suspension (إدارة الاشتراكات)
+    managerMessageTitle: 'رسالة من إدارة Easy clinic',
+    accountSuspendedTitle: 'الحساب في وضع التعطيل المؤقت',
+    accountSuspendedBannerDesc: 'تم تقييد إنشاء ملفات مرضى جديدة مؤقتاً من قِبل الإدارة. يمكنك فتح وتعديل ملفاتك القديمة وإضافة المتابعات لها بشكل طبيعي.',
+    accountSuspendedBlockedNewToast: 'التعطيل المؤقت مفعل: لا يمكن إنشاء ملف مريض جديد حالياً، يمكنك فقط تعديل ومتابعة الملفات القديمة.',
+
     // Arabic Months and Days
     months: [
       'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
@@ -736,6 +742,12 @@ export const translations = {
     designerBioTitle: 'Application Designer & Supervisor',
     designerBioDesc: 'Easy clinic was thoughtfully designed to serve physicians in their clinics, focusing on effortless clinical record-keeping, unlimited follow-up tracking, and 100% private offline local data storage.',
     designerSpecialtyBadge: 'Gastroenterology & Hepatology',
+
+    // Manager Notification & Account Suspension
+    managerMessageTitle: 'Message from Easy clinic Manager',
+    accountSuspendedTitle: 'Account Temporarily Suspended',
+    accountSuspendedBannerDesc: 'Creating new patient files is temporarily disabled by management. You can still open, edit, and add follow-ups to existing stored files.',
+    accountSuspendedBlockedNewToast: 'Account suspended: creating new patient files is currently disabled. You may edit and add follow-ups to existing files.',
 
     // English Months and Days
     months: [

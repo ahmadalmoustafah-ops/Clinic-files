@@ -21,10 +21,17 @@ import {
   RefreshCw,
   LogOut,
   ShieldCheck,
+  MessageSquareText,
+  PauseCircle,
+  Lock,
 } from 'lucide-react';
 import { PatientRecord, Appointment, ViewMode, UserSession } from './types';
 import { StorageService } from './services/storageService';
 import { AuthService } from './services/authService';
+import {
+  SubscriptionService,
+  ClientSubscriptionState,
+} from './services/subscriptionService';
 import { SmartSearchBar } from './components/SmartSearchBar';
 import { PatientForm, PatientSaveMeta } from './components/PatientForm';
 import { AppointmentsCalendar } from './components/AppointmentsCalendar';
@@ -34,11 +41,41 @@ import { AnalyticsModal } from './components/AnalyticsModal';
 import { OfflineIndicator, OfflineBadge } from './components/OfflineIndicator';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { AuthScreen } from './components/AuthScreen';
+import { ManagerDashboard } from './components/ManagerDashboard';
 import { useLanguage } from './context/LanguageContext';
 import { useAppUpdate } from './hooks/useAppUpdate';
 
+function checkIsManagerRoute(): boolean {
+  if (typeof window === 'undefined') return false;
+  const pathname = window.location.pathname.replace(/\/+$/, '');
+  const searchParams = new URLSearchParams(window.location.search);
+  return (
+    pathname === '/manager' ||
+    searchParams.get('page') === 'manager' ||
+    window.location.hash === '#/manager'
+  );
+}
+
+const DEFAULT_SUB_STATE: ClientSubscriptionState = {
+  status: 'active',
+  adminMessage: '',
+  adminMessageUpdatedAt: null,
+};
+
 export default function App() {
-  const { t, isRTL, toggleLanguage } = useLanguage();
+  const { t, isRTL, language, toggleLanguage } = useLanguage();
+  const [isManagerRoute, setIsManagerRoute] = useState<boolean>(checkIsManagerRoute);
+
+  useEffect(() => {
+    const onRouteChange = () => setIsManagerRoute(checkIsManagerRoute());
+    window.addEventListener('popstate', onRouteChange);
+    window.addEventListener('hashchange', onRouteChange);
+    return () => {
+      window.removeEventListener('popstate', onRouteChange);
+      window.removeEventListener('hashchange', onRouteChange);
+    };
+  }, []);
+
   const {
     hasUpdate,
     isChecking: isCheckingUpdate,
@@ -72,11 +109,19 @@ export default function App() {
   // Full Day Patient Filter
   const [selectedDayFilter, setSelectedDayFilter] = useState<'today' | 'yesterday' | 'custom' | 'all'>('today');
   const [customDayDate, setCustomDayDate] = useState<string>('');
-  const [appToast, setAppToast] = useState<string | null>(null);
+  const [appToast, setAppToast] = useState<{ msg: string; type: 'success' | 'warning' } | null>(null);
+  const [subscriptionState, setSubscriptionState] = useState<ClientSubscriptionState>(() => {
+    const existing = AuthService.getCurrentSession();
+    return existing ? SubscriptionService.getCachedState(existing.id) : DEFAULT_SUB_STATE;
+  });
 
-  const showAppToast = (msg: string) => {
-    setAppToast(msg);
-    setTimeout(() => setAppToast(null), 3800);
+  const toastTimerRef = useRef<number | null>(null);
+  const showAppToast = (msg: string, type: 'success' | 'warning' = 'success') => {
+    if (toastTimerRef.current) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    setAppToast({ msg, type });
+    toastTimerRef.current = window.setTimeout(() => setAppToast(null), 4000);
   };
 
   const handleAppUpdateClick = async () => {
@@ -125,19 +170,66 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (isManagerRoute) return;
     if (currentUser) {
       StorageService.setActiveUser(currentUser.id);
+      setSubscriptionState(SubscriptionService.getCachedState(currentUser.id));
       refreshData();
     } else {
       StorageService.setActiveUser(null);
+      setSubscriptionState(DEFAULT_SUB_STATE);
       setPatients([]);
       setAppointments([]);
       setLoading(false);
     }
-  }, [currentUser?.id]);
+  }, [currentUser?.id, isManagerRoute]);
+
+  // Sync subscription status (active/suspended) and manager yellow message silently in background
+  useEffect(() => {
+    if (isManagerRoute || !currentUser) return;
+
+    let cancelled = false;
+    const doSync = async () => {
+      const next = await SubscriptionService.syncAccount({
+        id: currentUser.id,
+        fullName: currentUser.fullName,
+        createdAt: currentUser.createdAt,
+      });
+      if (!cancelled) {
+        setSubscriptionState(next);
+      }
+    };
+
+    doSync();
+
+    const intervalId = window.setInterval(() => {
+      if (navigator.onLine) {
+        doSync();
+      }
+    }, 20000);
+
+    const onWake = () => {
+      if (document.visibilityState === 'visible' && navigator.onLine) {
+        doSync();
+      }
+    };
+
+    window.addEventListener('focus', doSync);
+    window.addEventListener('online', doSync);
+    document.addEventListener('visibilitychange', onWake);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', doSync);
+      window.removeEventListener('online', doSync);
+      document.removeEventListener('visibilitychange', onWake);
+    };
+  }, [currentUser?.id, currentUser?.fullName, currentUser?.createdAt, isManagerRoute]);
 
   const handleAuthenticated = (session: UserSession) => {
     StorageService.setActiveUser(session.id);
+    setSubscriptionState(SubscriptionService.getCachedState(session.id));
     setViewMode('home');
     setActivePatient(null);
     setSelectedDayFilter('today');
@@ -147,6 +239,7 @@ export default function App() {
   const handleLogout = () => {
     AuthService.logout();
     StorageService.setActiveUser(null);
+    setSubscriptionState(DEFAULT_SUB_STATE);
     setIsOptionsMenuOpen(false);
     setIsBackupOpen(false);
     setIsAnalyticsOpen(false);
@@ -238,7 +331,13 @@ export default function App() {
     }
   };
 
+  const isAccountSuspended = subscriptionState.status === 'suspended';
+
   const handleNewPatient = () => {
+    if (isAccountSuspended) {
+      showAppToast(t.accountSuspendedBlockedNewToast, 'warning');
+      return;
+    }
     setActivePatient(null);
     setAutoAddFollowUp(false);
     setViewMode('patient-form');
@@ -259,6 +358,13 @@ export default function App() {
   const handleSavePatient = async (savedPatient: PatientRecord, meta?: PatientSaveMeta) => {
     const isNewCreation =
       meta?.isNewCreation ?? !patients.some((p) => p.id === savedPatient.id);
+
+    // Prevent saving newly created patient files while account is temporarily suspended;
+    // existing stored files and follow-ups remain completely editable.
+    if (isNewCreation && isAccountSuspended) {
+      showAppToast(t.accountSuspendedBlockedNewToast, 'warning');
+      return;
+    }
 
     await StorageService.savePatient(savedPatient);
     await refreshData();
@@ -310,6 +416,11 @@ export default function App() {
 
   const ChevronIcon = isRTL ? ChevronLeft : ChevronRight;
 
+  // Independent linked page: Easy clinic manager (/manager)
+  if (isManagerRoute) {
+    return <ManagerDashboard />;
+  }
+
   if (!currentUser) {
     return (
       <AndroidFrame>
@@ -324,11 +435,19 @@ export default function App() {
       {/* Offline Toast Reassurance */}
       <OfflineIndicator />
 
-      {/* App Auto-Save / Auto-Backup Toast */}
+      {/* App Auto-Save / Auto-Backup / Restriction Toast */}
       {appToast && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-emerald-600 text-white px-4 py-2.5 rounded-2xl shadow-xl text-xs font-bold flex items-center gap-2 animate-in fade-in zoom-in-95 duration-200 max-w-[90%] text-center">
-          <CheckCircle2 className="w-4 h-4 shrink-0" />
-          <span>{appToast}</span>
+        <div
+          className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 text-white px-4 py-2.5 rounded-2xl shadow-xl text-xs font-bold flex items-center gap-2 animate-in fade-in zoom-in-95 duration-200 max-w-[90%] text-center ${
+            appToast.type === 'warning' ? 'bg-rose-600' : 'bg-emerald-600'
+          }`}
+        >
+          {appToast.type === 'warning' ? (
+            <PauseCircle className="w-4 h-4 shrink-0" />
+          ) : (
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+          )}
+          <span>{appToast.msg}</span>
         </div>
       )}
 
@@ -577,6 +696,51 @@ export default function App() {
           </header>
 
           <main className="p-4 space-y-4 max-w-4xl mx-auto w-full flex-1">
+            {/* 0.A DIRECT CLIENT MESSAGE FROM MANAGER IN YELLOW RECTANGLE */}
+            {subscriptionState.adminMessage && (
+              <div className="bg-yellow-100 dark:bg-amber-950/60 border-2 border-yellow-400 dark:border-amber-500 text-amber-950 dark:text-amber-100 rounded-2xl p-4 shadow-sm animate-in fade-in duration-200">
+                <div className="flex items-start gap-3">
+                  <div className="p-2 bg-yellow-300/80 dark:bg-amber-800/70 text-amber-950 dark:text-amber-100 rounded-xl shrink-0">
+                    <MessageSquareText className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-xs font-extrabold text-amber-950 dark:text-amber-200">
+                        {t.managerMessageTitle}
+                      </span>
+                      {subscriptionState.adminMessageUpdatedAt && (
+                        <span className="text-[10px] text-amber-800/80 dark:text-amber-300/80 font-mono">
+                          {new Date(subscriptionState.adminMessageUpdatedAt).toLocaleDateString(
+                            language === 'ar' ? 'ar-EG' : 'en-US'
+                          )}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs font-semibold leading-relaxed whitespace-pre-wrap text-amber-950 dark:text-amber-100">
+                      {subscriptionState.adminMessage}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 0.B TEMPORARY SUSPENSION NOTICE (Blocks new files, allows editing stored files & follow-ups) */}
+            {isAccountSuspended && (
+              <div className="bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 text-rose-900 dark:text-rose-200 rounded-2xl p-3.5 flex items-start gap-3 shadow-xs">
+                <div className="p-2 bg-rose-100 dark:bg-rose-900/70 text-rose-600 dark:text-rose-300 rounded-xl shrink-0">
+                  <PauseCircle className="w-4 h-4" />
+                </div>
+                <div className="space-y-0.5">
+                  <h3 className="text-xs font-extrabold text-rose-900 dark:text-rose-200">
+                    {t.accountSuspendedTitle}
+                  </h3>
+                  <p className="text-[11px] leading-relaxed text-rose-800 dark:text-rose-300">
+                    {t.accountSuspendedBannerDesc}
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* 1. TOP SMART SEARCH BAR */}
             <div className="space-y-1">
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 px-1">
@@ -617,12 +781,25 @@ export default function App() {
               {/* Task 1: New Patient File */}
               <button
                 onClick={handleNewPatient}
-                className={`group relative flex flex-col items-start justify-between p-4 bg-gradient-to-br from-sky-600 to-sky-700 hover:from-sky-700 hover:to-sky-800 text-white rounded-3xl shadow-sm hover:shadow-md transition-all active:scale-[0.98] ${
-                  isRTL ? 'text-right' : 'text-left'
-                } cursor-pointer min-h-[120px]`}
+                className={`group relative flex flex-col items-start justify-between p-4 rounded-3xl shadow-sm transition-all ${
+                  isAccountSuspended
+                    ? 'bg-slate-400 dark:bg-slate-800 text-white/90 opacity-75 cursor-not-allowed'
+                    : 'bg-gradient-to-br from-sky-600 to-sky-700 hover:from-sky-700 hover:to-sky-800 text-white hover:shadow-md active:scale-[0.98] cursor-pointer'
+                } ${isRTL ? 'text-right' : 'text-left'} min-h-[120px]`}
               >
-                <div className="p-2.5 bg-white/20 rounded-2xl backdrop-blur-xs group-hover:scale-110 transition-transform">
-                  <UserPlus className="w-6 h-6" />
+                <div className="flex items-center justify-between w-full">
+                  <div className="p-2.5 bg-white/20 rounded-2xl backdrop-blur-xs group-hover:scale-110 transition-transform">
+                    {isAccountSuspended ? (
+                      <Lock className="w-6 h-6" />
+                    ) : (
+                      <UserPlus className="w-6 h-6" />
+                    )}
+                  </div>
+                  {isAccountSuspended && (
+                    <span className="text-[10px] font-bold bg-rose-600 text-white px-2 py-0.5 rounded-full">
+                      {t.accountSuspendedTitle}
+                    </span>
+                  )}
                 </div>
                 <div className="mt-2">
                   <h2 className="text-sm font-bold">{t.newPatient}</h2>
@@ -908,12 +1085,34 @@ export default function App() {
 
               <button
                 onClick={handleNewPatient}
-                className="flex flex-col items-center justify-center gap-1 text-xs font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors cursor-pointer"
+                className={`flex flex-col items-center justify-center gap-1 text-xs font-bold transition-colors ${
+                  isAccountSuspended
+                    ? 'text-slate-400 opacity-75 cursor-not-allowed'
+                    : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer'
+                }`}
               >
-                <div className="w-8 h-8 rounded-full bg-sky-600 text-white flex items-center justify-center -mt-3 shadow-md shadow-sky-600/30">
-                  <UserPlus className="w-4 h-4" />
+                <div
+                  className={`w-8 h-8 rounded-full text-white flex items-center justify-center -mt-3 shadow-md ${
+                    isAccountSuspended
+                      ? 'bg-rose-500 shadow-rose-500/30'
+                      : 'bg-sky-600 shadow-sky-600/30'
+                  }`}
+                >
+                  {isAccountSuspended ? (
+                    <Lock className="w-4 h-4" />
+                  ) : (
+                    <UserPlus className="w-4 h-4" />
+                  )}
                 </div>
-                <span className="text-sky-700 dark:text-sky-400 text-[11px] font-bold">{t.newPatient}</span>
+                <span
+                  className={`text-[11px] font-bold ${
+                    isAccountSuspended
+                      ? 'text-rose-600 dark:text-rose-400'
+                      : 'text-sky-700 dark:text-sky-400'
+                  }`}
+                >
+                  {t.newPatient}
+                </span>
               </button>
 
               <button
