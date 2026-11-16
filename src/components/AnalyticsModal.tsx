@@ -1,8 +1,13 @@
-import React from 'react';
-import { X, BarChart3, TrendingUp, Users, Calendar, Award } from 'lucide-react';
+import React, { useMemo } from 'react';
+import { X, BarChart3, Clock, Users, Calendar, Award } from 'lucide-react';
 import { PatientRecord } from '../types';
 import { ClinicAnalytics } from './ClinicAnalytics';
 import { useLanguage } from '../context/LanguageContext';
+import {
+  formatUsageDuration,
+  getActualAppUsageStart,
+  getActualUsageDays,
+} from '../utils/analyticsUtils';
 
 interface AnalyticsModalProps {
   isOpen: boolean;
@@ -15,7 +20,13 @@ export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
   onClose,
   patients,
 }) => {
-  const { t, isRTL } = useLanguage();
+  const { t, isRTL, language } = useLanguage();
+
+  const usageDurationText = useMemo(() => {
+    const start = getActualAppUsageStart(patients);
+    const days = getActualUsageDays(start);
+    return formatUsageDuration(days, t, language);
+  }, [patients, t, language]);
 
   if (!isOpen) return null;
 
@@ -112,15 +123,15 @@ export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
             </div>
 
             <div className="bg-purple-50 dark:bg-purple-950/50 border border-purple-100 dark:border-purple-900/60 rounded-2xl p-3 flex items-center gap-3">
-              <div className="p-2 bg-purple-600 text-white rounded-xl">
-                <TrendingUp className="w-4 h-4" />
+              <div className="p-2 bg-purple-600 text-white rounded-xl shrink-0">
+                <Clock className="w-4 h-4" />
               </div>
-              <div>
+              <div className="min-w-0">
                 <span className="text-[11px] text-slate-500 dark:text-slate-400 block font-medium">
-                  {t.steadyGrowth}
+                  {t.usageDurationLabel}
                 </span>
-                <span className="text-base font-bold text-purple-600 dark:text-purple-300 font-mono">
-                  +18%
+                <span className="text-sm sm:text-base font-bold text-purple-700 dark:text-purple-300 truncate block">
+                  {usageDurationText}
                 </span>
               </div>
             </div>

@@ -11,6 +11,7 @@ import {
   FileCheck2,
   HardDrive,
   RefreshCw,
+  Zap,
 } from 'lucide-react';
 import { StorageService } from '../services/storageService';
 import { useLanguage } from '../context/LanguageContext';
@@ -58,6 +59,13 @@ export const BackupModal: React.FC<BackupModalProps> = ({
     lastUpdated: string;
   } | null>(null);
 
+  const [autoBackupInfo, setAutoBackupInfo] = useState({
+    enabled: false,
+    lastAutoBackupDate: null as string | null,
+    count: 0,
+    hasSnapshot: false,
+  });
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadStats = async () => {
@@ -66,9 +74,34 @@ export const BackupModal: React.FC<BackupModalProps> = ({
       setStats(s);
       const dbInfo = StorageService.getLocalDatabaseInfo();
       setLocalDbInfo(dbInfo);
+      setAutoBackupInfo(StorageService.getAutoBackupInfo());
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const handleToggleAutoBackup = () => {
+    const next = !autoBackupInfo.enabled;
+    StorageService.setAutoBackupEnabled(next);
+    setAutoBackupInfo(StorageService.getAutoBackupInfo());
+  };
+
+  const handleDownloadLatestAutoSnapshot = () => {
+    const json = StorageService.getLastAutoBackupSnapshot();
+    if (!json) return;
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    a.href = url;
+    a.download = `Easy_clinic_auto_backup_${dateStr}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setIsSuccess(true);
+    setStatus(t.toastBackupExportSuccess);
   };
 
   const handleForceSync = async () => {
@@ -366,8 +399,98 @@ export const BackupModal: React.FC<BackupModalProps> = ({
           </div>
         )}
 
-        {/* Action 1: Export Complete Backup */}
+        {/* Action 0: Auto-Backup Setting (النسخ الاحتياطي التلقائي) */}
         <div className="space-y-4">
+          <div
+            className={`p-4 rounded-2xl border transition-colors ${
+              autoBackupInfo.enabled
+                ? 'bg-teal-50/70 dark:bg-teal-950/30 border-teal-200 dark:border-teal-800'
+                : 'bg-slate-50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700'
+            }`}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-2.5">
+                <div
+                  className={`p-2 rounded-xl shrink-0 mt-0.5 ${
+                    autoBackupInfo.enabled
+                      ? 'bg-teal-600 text-white'
+                      : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                  }`}
+                >
+                  <Zap className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-xs font-bold text-slate-900 dark:text-white">
+                      {t.autoBackupTitle}
+                    </h3>
+                    <span
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                        autoBackupInfo.enabled
+                          ? 'bg-teal-100 dark:bg-teal-900/70 text-teal-800 dark:text-teal-300'
+                          : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                      }`}
+                    >
+                      {autoBackupInfo.enabled ? t.autoBackupEnabledBadge : t.autoBackupDisabledBadge}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                    {t.autoBackupDesc}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                role="switch"
+                aria-checked={autoBackupInfo.enabled}
+                onClick={handleToggleAutoBackup}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  autoBackupInfo.enabled ? 'bg-teal-600' : 'bg-slate-300 dark:bg-slate-600'
+                }`}
+                dir="ltr"
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition duration-200 ease-in-out ${
+                    autoBackupInfo.enabled ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {(autoBackupInfo.enabled || autoBackupInfo.count > 0) && (
+              <div className="mt-3 pt-2.5 border-t border-slate-200/70 dark:border-slate-700/60 flex items-center justify-between gap-2 flex-wrap text-[11px] text-slate-500 dark:text-slate-400">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span>
+                    {t.lastAutoBackupLabel}{' '}
+                    <strong className="text-slate-700 dark:text-slate-200">
+                      {autoBackupInfo.lastAutoBackupDate
+                        ? formatDateTime(autoBackupInfo.lastAutoBackupDate)
+                        : t.noAutoBackupYet}
+                    </strong>
+                  </span>
+                  {autoBackupInfo.count > 0 && (
+                    <span className="font-mono text-teal-700 dark:text-teal-300 font-semibold">
+                      ({t.autoBackupCountLabel} {autoBackupInfo.count})
+                    </span>
+                  )}
+                </div>
+
+                {autoBackupInfo.hasSnapshot && (
+                  <button
+                    type="button"
+                    onClick={handleDownloadLatestAutoSnapshot}
+                    className="inline-flex items-center gap-1 text-[11px] font-bold text-teal-700 dark:text-teal-300 hover:underline cursor-pointer"
+                  >
+                    <Download className="w-3 h-3" />
+                    <span>{t.downloadLatestAutoBackup}</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Action 1: Export Complete Backup */}
           <div className="p-4 bg-sky-50/70 dark:bg-sky-950/30 border border-sky-100 dark:border-sky-900 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">

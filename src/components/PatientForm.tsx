@@ -3,7 +3,6 @@ import {
   ArrowRight,
   ArrowLeft,
   Save,
-  Printer,
   Trash2,
   Plus,
   Image as ImageIcon,
@@ -26,9 +25,14 @@ import { ImageModal } from './ImageModal';
 import { useLanguage } from '../context/LanguageContext';
 import { exportPatientToWord } from '../services/wordExportService';
 
+export interface PatientSaveMeta {
+  isNewCreation: boolean;
+  source: 'save' | 'back';
+}
+
 interface PatientFormProps {
   initialPatient?: PatientRecord | null;
-  onSave: (patient: PatientRecord) => void | Promise<void>;
+  onSave: (patient: PatientRecord, meta?: PatientSaveMeta) => void | Promise<void>;
   onDelete?: (patientId: string) => void;
   onBack: () => void;
   autoAddFollowUp?: boolean;
@@ -104,6 +108,10 @@ export const PatientForm: React.FC<PatientFormProps> = ({
     diagnosis: false,
   });
 
+  const hasSavedOnceRef = useRef<boolean>(!isNew);
+  const isDirtyRef = useRef<boolean>(false);
+  const [isAutoSavingBack, setIsAutoSavingBack] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const followUpFileInputRef = useRef<HTMLInputElement>(null);
   const [activeFollowUpIdForUpload, setActiveFollowUpIdForUpload] = useState<string | null>(null);
@@ -123,6 +131,7 @@ export const PatientForm: React.FC<PatientFormProps> = ({
   };
 
   const updateField = (field: keyof PatientRecord, val: any) => {
+    isDirtyRef.current = true;
     setPatient((prev) => ({
       ...prev,
       [field]: val,
@@ -151,17 +160,20 @@ export const PatientForm: React.FC<PatientFormProps> = ({
           category: 'general',
         };
 
+        isDirtyRef.current = true;
         if (followUpId) {
           setPatient((prev) => ({
             ...prev,
             followUps: prev.followUps.map((fu) =>
               fu.id === followUpId ? { ...fu, images: [...(fu.images || []), newImg] } : fu
             ),
+            updatedAt: new Date().toISOString(),
           }));
         } else {
           setPatient((prev) => ({
             ...prev,
             images: [...prev.images, newImg],
+            updatedAt: new Date().toISOString(),
           }));
         }
         showToast(t.toastImageAdded);
@@ -174,6 +186,7 @@ export const PatientForm: React.FC<PatientFormProps> = ({
 
   // Add a new Follow-up (+)
   const handleAddFollowUp = () => {
+    isDirtyRef.current = true;
     const newFollowUp: PatientFollowUp = {
       id: `fu-${Date.now()}`,
       date: getFormattedNowDateTime(),
@@ -198,6 +211,7 @@ export const PatientForm: React.FC<PatientFormProps> = ({
   };
 
   const updateFollowUpField = (id: string, field: keyof PatientFollowUp, val: any) => {
+    isDirtyRef.current = true;
     setPatient((prev) => ({
       ...prev,
       followUps: prev.followUps.map((fu) => (fu.id === id ? { ...fu, [field]: val } : fu)),
@@ -207,12 +221,81 @@ export const PatientForm: React.FC<PatientFormProps> = ({
 
   const handleDeleteFollowUp = (id: string) => {
     if (window.confirm(t.deleteFollowUpConfirm)) {
+      isDirtyRef.current = true;
       setPatient((prev) => ({
         ...prev,
         followUps: prev.followUps.filter((fu) => fu.id !== id),
+        updatedAt: new Date().toISOString(),
       }));
       showToast(t.toastFollowUpDeleted);
     }
+  };
+
+  const hasAnyNewPatientContent = (p: PatientRecord): boolean => {
+    const textFields = [
+      p.name,
+      p.age,
+      p.address,
+      p.phone,
+      p.habits,
+      p.medicalHistory,
+      p.surgicalHistory,
+      p.drugHistory,
+      p.allergyHistory,
+      p.familyHistory,
+      p.symptoms,
+      p.clinicalExam,
+      p.echo,
+      p.labs,
+      p.otherInvestigations,
+      p.differentialDiagnosis,
+      p.waiting,
+      p.treatment,
+    ];
+    return (
+      textFields.some((f) => Boolean(f && f.trim().length > 0)) ||
+      (p.images && p.images.length > 0) ||
+      (p.followUps && p.followUps.length > 0)
+    );
+  };
+
+  const handleBackClick = async () => {
+    if (isAutoSavingBack || isSavingWord) return;
+
+    const isBrandNew = !hasSavedOnceRef.current;
+    const shouldAutoSave = isBrandNew ? hasAnyNewPatientContent(patient) : isDirtyRef.current;
+
+    if (shouldAutoSave) {
+      setIsAutoSavingBack(true);
+      try {
+        const patientToSave: PatientRecord =
+          isBrandNew && !patient.name.trim()
+            ? {
+                ...patient,
+                name: `${t.unnamedPatientFallback} (${patient.examDate})`,
+                updatedAt: new Date().toISOString(),
+              }
+            : {
+                ...patient,
+                updatedAt: new Date().toISOString(),
+              };
+
+        await Promise.resolve(
+          onSave(patientToSave, {
+            isNewCreation: isBrandNew,
+            source: 'back',
+          })
+        );
+        hasSavedOnceRef.current = true;
+        isDirtyRef.current = false;
+      } catch (err) {
+        console.error('Auto-save on back failed:', err);
+      } finally {
+        setIsAutoSavingBack(false);
+      }
+    }
+
+    onBack();
   };
 
   const handleSave = async () => {
@@ -224,7 +307,15 @@ export const PatientForm: React.FC<PatientFormProps> = ({
 
     setIsSavingWord(true);
     try {
-      await Promise.resolve(onSave(patient));
+      const wasNew = !hasSavedOnceRef.current;
+      await Promise.resolve(
+        onSave(patient, {
+          isNewCreation: wasNew,
+          source: 'save',
+        })
+      );
+      hasSavedOnceRef.current = true;
+      isDirtyRef.current = false;
       await exportPatientToWord(patient, language);
       showToast(t.toastSavedAndWordExported, 'success');
     } catch (err) {
@@ -233,10 +324,6 @@ export const PatientForm: React.FC<PatientFormProps> = ({
     } finally {
       setIsSavingWord(false);
     }
-  };
-
-  const handlePrint = () => {
-    window.print();
   };
 
   const BackIcon = isRTL ? ArrowRight : ArrowLeft;
@@ -256,19 +343,20 @@ export const PatientForm: React.FC<PatientFormProps> = ({
       )}
 
       {/* Top Header Bar */}
-      <header className="sticky top-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 px-4 py-3 flex items-center justify-between no-print shadow-xs">
+      <header className="sticky top-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 px-4 py-3 flex items-center justify-between shadow-xs">
         <div className="flex items-center gap-2">
           <button
-            onClick={onBack}
-            className="p-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
+            onClick={handleBackClick}
+            disabled={isAutoSavingBack || isSavingWord}
+            className="p-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors cursor-pointer disabled:opacity-50"
             title="Back"
           >
             <BackIcon className="w-5 h-5" />
           </button>
           <div>
             <h1 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-              <span>{isNew ? t.createNewPatientTitle : patient.name || t.activeFile}</span>
-              {!isNew && (
+              <span>{!hasSavedOnceRef.current ? t.createNewPatientTitle : patient.name || t.activeFile}</span>
+              {hasSavedOnceRef.current && (
                 <span className="text-[11px] font-normal text-sky-600 bg-sky-50 dark:bg-sky-950/60 dark:text-sky-300 px-2 py-0.5 rounded-md border border-sky-100 dark:border-sky-800">
                   {t.activeFile}
                 </span>
@@ -281,14 +369,6 @@ export const PatientForm: React.FC<PatientFormProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5">
-          <button
-            onClick={handlePrint}
-            className="p-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
-            title={t.printFile}
-          >
-            <Printer className="w-4 h-4" />
-          </button>
-
           {!isNew && onDelete && (
             <button
               onClick={() => {
@@ -371,24 +451,6 @@ export const PatientForm: React.FC<PatientFormProps> = ({
 
       {/* Main Content Area */}
       <div className="p-4 space-y-4 max-w-4xl mx-auto w-full">
-        {/* Printable Official Clinic Header */}
-        <div className="hidden print:block p-6 mb-6 border-b-2 border-slate-900">
-          <div className="flex justify-between items-start">
-            <div>
-              <h1 className="text-xl font-bold font-sans">Easy clinic</h1>
-              <p className="text-sm text-slate-600">Patient Clinical Record & Prescription</p>
-            </div>
-            <div className={`text-xs text-slate-600 ${isRTL ? 'text-left' : 'text-right'}`}>
-              <p>{t.examDateAuto}: {patient.examDate}</p>
-              <p>Printed: {getFormattedToday()}</p>
-            </div>
-          </div>
-          <div className="grid grid-cols-3 gap-4 mt-4 p-3 bg-slate-50 border border-slate-200 rounded">
-            <div><strong>{t.patientFullName}:</strong> {patient.name}</div>
-            <div><strong>{t.age}:</strong> {patient.age}</div>
-            <div><strong>{t.residence}:</strong> {patient.address}</div>
-          </div>
-        </div>
 
         {/* TAB 1: Patient Primary Details & Clinical Exam */}
         {activeTab === 'details' && (
@@ -924,6 +986,7 @@ export const PatientForm: React.FC<PatientFormProps> = ({
         image={selectedImage}
         onClose={() => setSelectedImage(null)}
         onDelete={(id) => {
+          isDirtyRef.current = true;
           setPatient((prev) => ({
             ...prev,
             images: prev.images.filter((img) => img.id !== id),
@@ -931,6 +994,7 @@ export const PatientForm: React.FC<PatientFormProps> = ({
               ...fu,
               images: fu.images?.filter((img) => img.id !== id) || [],
             })),
+            updatedAt: new Date().toISOString(),
           }));
           showToast(t.toastImageDeleted);
         }}

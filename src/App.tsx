@@ -22,7 +22,7 @@ import {
 import { PatientRecord, Appointment, ViewMode } from './types';
 import { StorageService } from './services/storageService';
 import { SmartSearchBar } from './components/SmartSearchBar';
-import { PatientForm } from './components/PatientForm';
+import { PatientForm, PatientSaveMeta } from './components/PatientForm';
 import { AppointmentsCalendar } from './components/AppointmentsCalendar';
 import { AndroidFrame } from './components/AndroidFrame';
 import { BackupModal } from './components/BackupModal';
@@ -53,10 +53,17 @@ export default function App() {
   // Full Day Patient Filter
   const [selectedDayFilter, setSelectedDayFilter] = useState<'today' | 'yesterday' | 'custom' | 'all'>('today');
   const [customDayDate, setCustomDayDate] = useState<string>('');
+  const [appToast, setAppToast] = useState<string | null>(null);
+
+  const showAppToast = (msg: string) => {
+    setAppToast(msg);
+    setTimeout(() => setAppToast(null), 3800);
+  };
 
   // Load data & seed sample if empty
   const refreshData = async () => {
     try {
+      StorageService.getAppFirstUsedDate();
       await StorageService.initSeedDataIfEmpty();
       const pList = await StorageService.getAllPatients();
       const aList = await StorageService.getAllAppointments();
@@ -159,10 +166,50 @@ export default function App() {
     setViewMode('patient-form');
   };
 
-  const handleSavePatient = async (savedPatient: PatientRecord) => {
+  const triggerJsonDownload = (json: string, fileName: string) => {
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleSavePatient = async (savedPatient: PatientRecord, meta?: PatientSaveMeta) => {
+    const isNewCreation =
+      meta?.isNewCreation ?? !patients.some((p) => p.id === savedPatient.id);
+
     await StorageService.savePatient(savedPatient);
     await refreshData();
     setActivePatient(savedPatient);
+
+    const autoBackupEnabled = StorageService.isAutoBackupEnabled();
+
+    if (isNewCreation && autoBackupEnabled) {
+      try {
+        const backupResult = await StorageService.performAutoBackup();
+        const delayMs = meta?.source === 'save' ? 450 : 50;
+        setTimeout(() => {
+          triggerJsonDownload(backupResult.json, backupResult.fileName);
+        }, delayMs);
+
+        if (meta?.source === 'back') {
+          showAppToast(`${t.toastAutoSavedOnBack} · ${t.toastAutoBackupSuccess}`);
+        } else {
+          showAppToast(t.toastAutoBackupSuccess);
+        }
+        return;
+      } catch (err) {
+        console.error('Auto-backup failed:', err);
+      }
+    }
+
+    if (meta?.source === 'back') {
+      showAppToast(t.toastAutoSavedOnBack);
+    }
   };
 
   const handleDeletePatient = async (patientId: string) => {
@@ -189,6 +236,14 @@ export default function App() {
     <AndroidFrame>
       {/* Offline Toast Reassurance */}
       <OfflineIndicator />
+
+      {/* App Auto-Save / Auto-Backup Toast */}
+      {appToast && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-emerald-600 text-white px-4 py-2.5 rounded-2xl shadow-xl text-xs font-bold flex items-center gap-2 animate-in fade-in zoom-in-95 duration-200 max-w-[90%] text-center">
+          <CheckCircle2 className="w-4 h-4 shrink-0" />
+          <span>{appToast}</span>
+        </div>
+      )}
 
       {/* View Router */}
       {viewMode === 'patient-form' && (

@@ -31,6 +31,11 @@ function openDatabase(): Promise<IDBDatabase> {
 const LOCAL_STORAGE_PATIENTS_KEY = 'easy_clinic_patients';
 const LOCAL_STORAGE_APPOINTMENTS_KEY = 'easy_clinic_appointments';
 const LOCAL_STORAGE_STATUS_KEY = 'easy_clinic_db_status';
+const AUTO_BACKUP_ENABLED_KEY = 'easy_clinic_auto_backup_enabled';
+const LAST_AUTO_BACKUP_DATE_KEY = 'easy_clinic_last_auto_backup_date';
+const AUTO_BACKUP_COUNT_KEY = 'easy_clinic_auto_backup_count';
+const AUTO_BACKUP_SNAPSHOT_KEY = 'easy_clinic_auto_backup_snapshot';
+const FIRST_USED_AT_KEY = 'easy_clinic_first_used_at';
 
 function saveToLocalStoragePatients(patients: PatientRecord[]): void {
   try {
@@ -400,6 +405,82 @@ export const StorageService = {
     localStorage.setItem('easy_clinic_last_backup_date', nowIso);
 
     return JSON.stringify(backupData, null, 2);
+  },
+
+  getAppFirstUsedDate(): string {
+    const existing = localStorage.getItem(FIRST_USED_AT_KEY);
+    if (existing) return existing;
+    const nowIso = new Date().toISOString();
+    try {
+      localStorage.setItem(FIRST_USED_AT_KEY, nowIso);
+    } catch {}
+    return nowIso;
+  },
+
+  isAutoBackupEnabled(): boolean {
+    return localStorage.getItem(AUTO_BACKUP_ENABLED_KEY) === 'true';
+  },
+
+  setAutoBackupEnabled(enabled: boolean): void {
+    try {
+      localStorage.setItem(AUTO_BACKUP_ENABLED_KEY, enabled ? 'true' : 'false');
+    } catch (e) {
+      console.warn('Could not persist auto-backup setting', e);
+    }
+  },
+
+  getAutoBackupInfo(): {
+    enabled: boolean;
+    lastAutoBackupDate: string | null;
+    count: number;
+    hasSnapshot: boolean;
+  } {
+    const enabled = this.isAutoBackupEnabled();
+    const lastAutoBackupDate = localStorage.getItem(LAST_AUTO_BACKUP_DATE_KEY);
+    const countRaw = parseInt(localStorage.getItem(AUTO_BACKUP_COUNT_KEY) || '0', 10);
+    const hasSnapshot = Boolean(localStorage.getItem(AUTO_BACKUP_SNAPSHOT_KEY));
+    return {
+      enabled,
+      lastAutoBackupDate,
+      count: isNaN(countRaw) ? 0 : countRaw,
+      hasSnapshot,
+    };
+  },
+
+  getLastAutoBackupSnapshot(): string | null {
+    try {
+      return localStorage.getItem(AUTO_BACKUP_SNAPSHOT_KEY);
+    } catch {
+      return null;
+    }
+  },
+
+  async performAutoBackup(): Promise<{
+    json: string;
+    fileName: string;
+    timestamp: string;
+  }> {
+    const json = await this.exportBackup();
+    const now = new Date();
+    const timestamp = now.toISOString();
+    const dateStr = timestamp.split('T')[0];
+    const timeStr = `${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}`;
+    const fileName = `Easy_clinic_auto_backup_${dateStr}_${timeStr}.json`;
+
+    try {
+      localStorage.setItem(LAST_AUTO_BACKUP_DATE_KEY, timestamp);
+      const prevCount = parseInt(localStorage.getItem(AUTO_BACKUP_COUNT_KEY) || '0', 10) || 0;
+      localStorage.setItem(AUTO_BACKUP_COUNT_KEY, String(prevCount + 1));
+      try {
+        localStorage.setItem(AUTO_BACKUP_SNAPSHOT_KEY, json);
+      } catch (quotaErr) {
+        console.warn('Auto-backup snapshot exceeded localStorage quota, continuing with download', quotaErr);
+      }
+    } catch (e) {
+      console.warn('Could not update auto-backup metadata', e);
+    }
+
+    return { json, fileName, timestamp };
   },
 
   async importBackup(jsonString: string, mode: 'merge' | 'replace' = 'merge'): Promise<{
