@@ -18,9 +18,13 @@ import {
   CalendarDays,
   Award,
   X,
+  RefreshCw,
+  LogOut,
+  ShieldCheck,
 } from 'lucide-react';
-import { PatientRecord, Appointment, ViewMode } from './types';
+import { PatientRecord, Appointment, ViewMode, UserSession } from './types';
 import { StorageService } from './services/storageService';
+import { AuthService } from './services/authService';
 import { SmartSearchBar } from './components/SmartSearchBar';
 import { PatientForm, PatientSaveMeta } from './components/PatientForm';
 import { AppointmentsCalendar } from './components/AppointmentsCalendar';
@@ -29,10 +33,25 @@ import { BackupModal } from './components/BackupModal';
 import { AnalyticsModal } from './components/AnalyticsModal';
 import { OfflineIndicator, OfflineBadge } from './components/OfflineIndicator';
 import { PWAInstallButton } from './components/PWAInstallButton';
+import { AuthScreen } from './components/AuthScreen';
 import { useLanguage } from './context/LanguageContext';
+import { useAppUpdate } from './hooks/useAppUpdate';
 
 export default function App() {
   const { t, isRTL, toggleLanguage } = useLanguage();
+  const {
+    hasUpdate,
+    isChecking: isCheckingUpdate,
+    isUpdating,
+    checkForUpdates,
+    applyUpdate,
+  } = useAppUpdate();
+
+  const [currentUser, setCurrentUser] = useState<UserSession | null>(() => {
+    const existing = AuthService.getCurrentSession();
+    StorageService.setActiveUser(existing ? existing.id : null);
+    return existing;
+  });
 
   const [patients, setPatients] = useState<PatientRecord[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
@@ -60,11 +79,40 @@ export default function App() {
     setTimeout(() => setAppToast(null), 3800);
   };
 
-  // Load data & seed sample if empty
+  const handleAppUpdateClick = async () => {
+    if (isUpdating || isCheckingUpdate) return;
+    if (hasUpdate) {
+      setIsOptionsMenuOpen(false);
+      showAppToast(t.updateAppUpdating);
+      await applyUpdate();
+      return;
+    }
+
+    const result = await checkForUpdates();
+    if (result === 'update-available') {
+      setIsOptionsMenuOpen(false);
+      showAppToast(t.updateAppUpdating);
+      await applyUpdate();
+    } else if (result === 'offline') {
+      setIsOptionsMenuOpen(false);
+      showAppToast(t.updateAppOfflineToast);
+    } else {
+      setIsOptionsMenuOpen(false);
+      showAppToast(t.updateAppUpToDateToast);
+    }
+  };
+
+  // Load strictly isolated data for the active user
   const refreshData = async () => {
+    if (!StorageService.getActiveUser()) {
+      setPatients([]);
+      setAppointments([]);
+      setLoading(false);
+      return;
+    }
+
     try {
       StorageService.getAppFirstUsedDate();
-      await StorageService.initSeedDataIfEmpty();
       const pList = await StorageService.getAllPatients();
       const aList = await StorageService.getAllAppointments();
       setPatients(pList);
@@ -77,8 +125,38 @@ export default function App() {
   };
 
   useEffect(() => {
-    refreshData();
-  }, []);
+    if (currentUser) {
+      StorageService.setActiveUser(currentUser.id);
+      refreshData();
+    } else {
+      StorageService.setActiveUser(null);
+      setPatients([]);
+      setAppointments([]);
+      setLoading(false);
+    }
+  }, [currentUser?.id]);
+
+  const handleAuthenticated = (session: UserSession) => {
+    StorageService.setActiveUser(session.id);
+    setViewMode('home');
+    setActivePatient(null);
+    setSelectedDayFilter('today');
+    setCurrentUser(session);
+  };
+
+  const handleLogout = () => {
+    AuthService.logout();
+    StorageService.setActiveUser(null);
+    setIsOptionsMenuOpen(false);
+    setIsBackupOpen(false);
+    setIsAnalyticsOpen(false);
+    setIsAboutDesignerOpen(false);
+    setActivePatient(null);
+    setViewMode('home');
+    setPatients([]);
+    setAppointments([]);
+    setCurrentUser(null);
+  };
 
   // Tomorrow's appointments check for advance reminder notification
   const today = new Date();
@@ -232,6 +310,15 @@ export default function App() {
 
   const ChevronIcon = isRTL ? ChevronLeft : ChevronRight;
 
+  if (!currentUser) {
+    return (
+      <AndroidFrame>
+        <OfflineIndicator />
+        <AuthScreen onAuthenticated={handleAuthenticated} />
+      </AndroidFrame>
+    );
+  }
+
   return (
     <AndroidFrame>
       {/* Offline Toast Reassurance */}
@@ -283,8 +370,8 @@ export default function App() {
                   </h1>
                   <OfflineBadge />
                 </div>
-                <p className="text-[11px] text-slate-400">
-                  {t.appSubtitle}
+                <p className="text-[11px] text-slate-400 truncate max-w-[200px]">
+                  {currentUser.fullName} · {t.appSubtitle}
                 </p>
               </div>
             </div>
@@ -293,11 +380,17 @@ export default function App() {
             <div className="relative" ref={optionsMenuRef}>
               <button
                 onClick={() => setIsOptionsMenuOpen((prev) => !prev)}
-                className="p-2 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded-2xl transition-colors cursor-pointer border border-slate-200 dark:border-slate-700 shadow-2xs active:scale-95"
+                className="relative p-2 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded-2xl transition-colors cursor-pointer border border-slate-200 dark:border-slate-700 shadow-2xs active:scale-95"
                 title={t.moreOptionsMenu}
                 aria-label={t.moreOptionsMenu}
               >
                 <MoreVertical className="w-5 h-5 text-slate-700 dark:text-slate-200" />
+                {hasUpdate && (
+                  <span
+                    className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-900 animate-pulse"
+                    aria-label={t.updateAppAvailableBadge}
+                  />
+                )}
               </button>
 
               {/* Condensed 3-Dots Dropdown Options Menu */}
@@ -314,8 +407,22 @@ export default function App() {
                       isRTL ? 'left-0 origin-top-left' : 'right-0 origin-top-right'
                     } z-50 w-64 bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 py-2 animate-in fade-in zoom-in-95 duration-150 overflow-hidden`}
                   >
-                    <div className="px-4 py-2 border-b border-slate-100 dark:border-slate-800 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                      {t.optionsMenuTitle}
+                    <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-800/40">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          {t.optionsMenuTitle}
+                        </span>
+                        <span className="inline-flex items-center gap-1 text-[9px] font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.5 rounded-full">
+                          <ShieldCheck className="w-2.5 h-2.5" />
+                          {t.authPrivateVaultLabel}
+                        </span>
+                      </div>
+                      <p className="text-xs font-bold text-slate-900 dark:text-white truncate mt-1">
+                        {currentUser.fullName}
+                      </p>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 font-mono truncate" dir="ltr">
+                        {currentUser.displayIdentifier}
+                      </p>
                     </div>
 
                     {/* Option 1: Statistics (الإحصائية) */}
@@ -369,12 +476,78 @@ export default function App() {
                       </div>
                     </button>
 
-                    {/* Option 4: PWA Install Button */}
+                    {/* Option 4: App Live Update Button (تحديث التطبيق) */}
+                    <button
+                      onClick={handleAppUpdateClick}
+                      disabled={isCheckingUpdate || isUpdating}
+                      className={`w-full px-4 py-3 text-xs flex items-center gap-3 transition-colors cursor-pointer text-start border-t border-slate-100 dark:border-slate-800/60 disabled:opacity-60 ${
+                        hasUpdate
+                          ? 'bg-emerald-50/90 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 hover:bg-emerald-100 dark:hover:bg-emerald-900/50'
+                          : 'text-slate-800 dark:text-slate-200 hover:bg-emerald-50/60 dark:hover:bg-emerald-950/40'
+                      }`}
+                    >
+                      <div
+                        className={`p-1.5 rounded-xl shrink-0 ${
+                          hasUpdate
+                            ? 'bg-emerald-600 text-white shadow-xs'
+                            : 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-400'
+                        }`}
+                      >
+                        <RefreshCw
+                          className={`w-4 h-4 ${
+                            isCheckingUpdate || isUpdating ? 'animate-spin' : ''
+                          }`}
+                        />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-1.5">
+                          <span className="font-bold block">{t.updateAppTitle}</span>
+                          {hasUpdate && (
+                            <span className="text-[9px] font-extrabold bg-emerald-600 text-white px-1.5 py-0.5 rounded-full shrink-0 animate-pulse">
+                              {t.updateAppAvailableBadge}
+                            </span>
+                          )}
+                        </div>
+                        <span
+                          className={`text-[10px] block leading-snug ${
+                            hasUpdate
+                              ? 'text-emerald-700 dark:text-emerald-300 font-semibold'
+                              : 'text-slate-400'
+                          }`}
+                        >
+                          {isUpdating
+                            ? t.updateAppUpdating
+                            : isCheckingUpdate
+                            ? t.updateAppChecking
+                            : hasUpdate
+                            ? t.updateAppAvailableDesc
+                            : t.updateAppCheckDesc}
+                        </span>
+                      </div>
+                    </button>
+
+                    {/* Option 5: PWA Install Button */}
                     <div className="px-3">
                       <PWAInstallButton />
                     </div>
 
-                    {/* Option 5 (End of menu): About the Designer (لمحة عن المصمم) */}
+                    {/* Option 6: Sign Out / Switch Account */}
+                    <button
+                      onClick={handleLogout}
+                      className="w-full px-4 py-3 text-xs text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 flex items-center gap-3 transition-colors cursor-pointer text-start border-t border-slate-100 dark:border-slate-800/60"
+                    >
+                      <div className="p-1.5 bg-rose-100 dark:bg-rose-900/50 text-rose-600 dark:text-rose-400 rounded-xl shrink-0">
+                        <LogOut className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <span className="font-bold block truncate">{t.logoutTitle}</span>
+                        <span className="text-[10px] text-rose-500/80 dark:text-rose-400/80 block truncate">
+                          {t.logoutDesc}
+                        </span>
+                      </div>
+                    </button>
+
+                    {/* Option 7 (End of menu): About the Designer (لمحة عن المصمم) */}
                     <button
                       onClick={() => {
                         setIsOptionsMenuOpen(false);

@@ -70,3 +70,28 @@ export interface Appointment {
 }
 
 export type ViewMode = 'home' | 'patient-form' | 'calendar' | 'patient-list' | 'backup';
+
+export type IdentifierType = 'email' | 'phone';
+
+export interface UserAccount {
+  id: string;
+  fullName: string;
+  identifier: string; // normalized lowercase email or normalized phone digits
+  identifierType: IdentifierType;
+  displayIdentifier: string;
+  passwordSalt: string;
+  passwordHash: string;
+  createdAt: string;
+  lastLoginAt: string;
+}
+
+export interface UserSession {
+  id: string;
+  fullName: string;
+  identifier: string;
+  identifierType: IdentifierType;
+  displayIdentifier: string;
+  createdAt: string;
+  lastLoginAt: string;
+}
+

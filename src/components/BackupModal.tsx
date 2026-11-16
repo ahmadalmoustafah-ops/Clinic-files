@@ -107,10 +107,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({
   const handleForceSync = async () => {
     try {
       setIsProcessing(true);
-      const patients = await StorageService.getAllPatients();
-      const appointments = await StorageService.getAllAppointments();
-      localStorage.setItem('easy_clinic_patients', JSON.stringify(patients));
-      localStorage.setItem('easy_clinic_appointments', JSON.stringify(appointments));
+      await StorageService.syncCurrentUserStorage();
       await loadStats();
       setIsSuccess(true);
       setStatus(t.syncSuccessToast);
