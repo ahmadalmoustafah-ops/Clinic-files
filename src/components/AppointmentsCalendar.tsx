@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { Appointment, PatientRecord } from '../types';
 import { useLanguage } from '../context/LanguageContext';
+import { useBackHandler } from '../services/navigationHistory';
 
 interface AppointmentsCalendarProps {
   appointments: Appointment[];
@@ -46,6 +47,10 @@ export const AppointmentsCalendar: React.FC<AppointmentsCalendarProps> = ({
   const [appTime, setAppTime] = useState('10:00');
   const [appTitle, setAppTitle] = useState('');
   const [editingAppointmentId, setEditingAppointmentId] = useState<string | null>(null);
+
+  useBackHandler('calendar-appointment-modal', isModalOpen, () => {
+    setIsModalOpen(false);
+  });
 
   // Month navigation
   const handlePrevMonth = () => {

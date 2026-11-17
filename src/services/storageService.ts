@@ -221,6 +221,28 @@ export const StorageService = {
     }
   },
 
+  async getPatientCountForUser(userId: string): Promise<number> {
+    if (!userId) return 0;
+    const lsList = getFromLocalStoragePatients(userId);
+    if (lsList.length > 0) {
+      return lsList.length;
+    }
+
+    try {
+      const db = await openDatabase();
+      return await new Promise<number>((resolve) => {
+        const tx = db.transaction(PATIENTS_STORE_V2, 'readonly');
+        const store = tx.objectStore(PATIENTS_STORE_V2);
+        const index = store.index('ownerId');
+        const req = index.count(userId);
+        req.onsuccess = () => resolve(typeof req.result === 'number' ? req.result : 0);
+        req.onerror = () => resolve(0);
+      });
+    } catch {
+      return 0;
+    }
+  },
+
   async syncPatientsToIndexedDB(patients: PatientRecord[], targetUserId?: string): Promise<void> {
     const userId = targetUserId || requireUserId();
     if (!userId) return;

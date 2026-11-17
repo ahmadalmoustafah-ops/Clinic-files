@@ -44,6 +44,7 @@ import { AuthScreen } from './components/AuthScreen';
 import { ManagerDashboard } from './components/ManagerDashboard';
 import { useLanguage } from './context/LanguageContext';
 import { useAppUpdate } from './hooks/useAppUpdate';
+import { initNavigationHistory, useBackHandler } from './services/navigationHistory';
 
 function checkIsManagerRoute(): boolean {
   if (typeof window === 'undefined') return false;
@@ -90,9 +91,7 @@ export default function App() {
 
   const {
     hasUpdate,
-    isChecking: isCheckingUpdate,
     isUpdating,
-    checkForUpdates,
     applyUpdate,
   } = useAppUpdate();
 
@@ -108,6 +107,7 @@ export default function App() {
 
   // View Routing State
   const [viewMode, setViewMode] = useState<ViewMode>('home');
+  const [returnViewAfterForm, setReturnViewAfterForm] = useState<'home' | 'calendar'>('home');
   const [activePatient, setActivePatient] = useState<PatientRecord | null>(null);
   const [autoAddFollowUp, setAutoAddFollowUp] = useState(false);
 
@@ -118,6 +118,50 @@ export default function App() {
   const [isAboutDesignerOpen, setIsAboutDesignerOpen] = useState(false);
   const [isOptionsMenuOpen, setIsOptionsMenuOpen] = useState(false);
   const optionsMenuRef = useRef<HTMLDivElement>(null);
+
+  // Initialize history listener and sequential Back layers for all views & modals
+  useEffect(() => {
+    if (!isManagerRoute && currentUser) {
+      initNavigationHistory();
+    }
+  }, [isManagerRoute, currentUser?.id]);
+
+  useBackHandler(
+    'calendar-view',
+    !isManagerRoute &&
+      Boolean(currentUser) &&
+      (viewMode === 'calendar' ||
+        (viewMode === 'patient-form' && returnViewAfterForm === 'calendar')),
+    () => {
+      setViewMode('home');
+      setReturnViewAfterForm('home');
+    }
+  );
+  useBackHandler(
+    'home-options-menu',
+    !isManagerRoute && Boolean(currentUser) && viewMode === 'home' && isOptionsMenuOpen,
+    () => setIsOptionsMenuOpen(false)
+  );
+  useBackHandler(
+    'backup-modal',
+    !isManagerRoute && Boolean(currentUser) && isBackupOpen,
+    () => setIsBackupOpen(false)
+  );
+  useBackHandler(
+    'analytics-modal',
+    !isManagerRoute && Boolean(currentUser) && isAnalyticsOpen,
+    () => setIsAnalyticsOpen(false)
+  );
+  useBackHandler(
+    'data-protection-modal',
+    !isManagerRoute && Boolean(currentUser) && isDataProtectionOpen,
+    () => setIsDataProtectionOpen(false)
+  );
+  useBackHandler(
+    'about-designer-modal',
+    !isManagerRoute && Boolean(currentUser) && isAboutDesignerOpen,
+    () => setIsAboutDesignerOpen(false)
+  );
 
   // Full Day Patient Filter
   const [selectedDayFilter, setSelectedDayFilter] = useState<'today' | 'yesterday' | 'custom' | 'all'>('today');
@@ -137,27 +181,10 @@ export default function App() {
     toastTimerRef.current = window.setTimeout(() => setAppToast(null), 4000);
   };
 
-  const handleAppUpdateClick = async () => {
-    if (isUpdating || isCheckingUpdate) return;
-    if (hasUpdate) {
-      setIsOptionsMenuOpen(false);
-      showAppToast(t.updateAppUpdating);
-      await applyUpdate();
-      return;
-    }
-
-    const result = await checkForUpdates();
-    if (result === 'update-available') {
-      setIsOptionsMenuOpen(false);
-      showAppToast(t.updateAppUpdating);
-      await applyUpdate();
-    } else if (result === 'offline') {
-      setIsOptionsMenuOpen(false);
-      showAppToast(t.updateAppOfflineToast);
-    } else {
-      setIsOptionsMenuOpen(false);
-      showAppToast(t.updateAppUpToDateToast);
-    }
+  const handleHomeUpdateInstall = async () => {
+    if (isUpdating) return;
+    showAppToast(t.updateAppUpdating);
+    await applyUpdate();
   };
 
   // Load strictly isolated data for the active user
@@ -197,20 +224,46 @@ export default function App() {
     }
   }, [currentUser?.id, isManagerRoute]);
 
-  // Sync all locally registered accounts (id + fullName + createdAt only) and active subscription status
+  const patientsCountRef = useRef<number>(0);
+  patientsCountRef.current = patients.length;
+  const loadingRef = useRef<boolean>(loading);
+  loadingRef.current = loading;
+
+  // Sync all locally registered accounts (id + fullName + createdAt + filesCount only — zero patient content)
   useEffect(() => {
-    SubscriptionService.syncAllAccounts(AuthService.getAllAccountSummaries());
+    let cancelled = false;
+
+    const syncAllWithCounts = async () => {
+      const summaries = AuthService.getAllAccountSummaries();
+      if (!summaries.length) return;
+      const enriched = await Promise.all(
+        summaries.map(async (acc) => ({
+          ...acc,
+          filesCount: await StorageService.getPatientCountForUser(acc.id),
+        }))
+      );
+      if (!cancelled) {
+        await SubscriptionService.syncAllAccounts(enriched);
+      }
+    };
+
+    syncAllWithCounts();
     if (isManagerRoute || !currentUser) {
-      return;
+      return () => {
+        cancelled = true;
+      };
     }
 
-    let cancelled = false;
     const doSync = async () => {
-      await SubscriptionService.syncAllAccounts(AuthService.getAllAccountSummaries());
+      await syncAllWithCounts();
+      const filesCount = !loadingRef.current
+        ? patientsCountRef.current
+        : await StorageService.getPatientCountForUser(currentUser.id);
       const next = await SubscriptionService.syncAccount({
         id: currentUser.id,
         fullName: currentUser.fullName,
         createdAt: currentUser.createdAt,
+        filesCount,
       });
       if (!cancelled) {
         setSubscriptionState(next);
@@ -243,6 +296,17 @@ export default function App() {
       document.removeEventListener('visibilitychange', onWake);
     };
   }, [currentUser?.id, currentUser?.fullName, currentUser?.createdAt, isManagerRoute]);
+
+  // Immediately update server filesCount whenever the active user's patient file count changes after initial load
+  useEffect(() => {
+    if (isManagerRoute || !currentUser || loading) return;
+    SubscriptionService.syncAccount({
+      id: currentUser.id,
+      fullName: currentUser.fullName,
+      createdAt: currentUser.createdAt,
+      filesCount: patients.length,
+    });
+  }, [patients.length, loading, currentUser?.id, currentUser?.fullName, currentUser?.createdAt, isManagerRoute]);
 
   // Scheduled once-daily automatic backup at 4:00 PM (16:00 local time)
   const isRunningAutoBackupRef = useRef(false);
@@ -418,6 +482,7 @@ export default function App() {
   ) => {
     const found = patients.find((p) => p.id === patientId);
     if (found) {
+      setReturnViewAfterForm(viewMode === 'calendar' ? 'calendar' : 'home');
       setActivePatient(found);
       setAutoAddFollowUp(action === 'add-followup');
       setViewMode('patient-form');
@@ -431,6 +496,7 @@ export default function App() {
       showAppToast(t.accountSuspendedBlockedNewToast, 'warning');
       return;
     }
+    setReturnViewAfterForm(viewMode === 'calendar' ? 'calendar' : 'home');
     setActivePatient(null);
     setAutoAddFollowUp(false);
     setViewMode('patient-form');
@@ -443,13 +509,17 @@ export default function App() {
     // Prevent saving newly created patient files while account is temporarily suspended;
     // existing stored files and follow-ups remain completely editable.
     if (isNewCreation && isAccountSuspended) {
-      showAppToast(t.accountSuspendedBlockedNewToast, 'warning');
+      if (meta?.source !== 'autosave') {
+        showAppToast(t.accountSuspendedBlockedNewToast, 'warning');
+      }
       return;
     }
 
     await StorageService.savePatient(savedPatient);
     await refreshData();
-    setActivePatient(savedPatient);
+    if (meta?.source !== 'autosave') {
+      setActivePatient(savedPatient);
+    }
 
     if (meta?.source === 'back') {
       showAppToast(t.toastAutoSavedOnBack);
@@ -459,7 +529,8 @@ export default function App() {
   const handleDeletePatient = async (patientId: string) => {
     await StorageService.deletePatient(patientId);
     await refreshData();
-    setViewMode('home');
+    setViewMode(returnViewAfterForm);
+    setReturnViewAfterForm('home');
     setActivePatient(null);
   };
 
@@ -517,7 +588,10 @@ export default function App() {
           initialPatient={activePatient}
           onSave={handleSavePatient}
           onDelete={handleDeletePatient}
-          onBack={() => setViewMode('home')}
+          onBack={() => {
+            setViewMode(returnViewAfterForm);
+            setReturnViewAfterForm('home');
+          }}
           autoAddFollowUp={autoAddFollowUp}
         />
       )}
@@ -564,12 +638,6 @@ export default function App() {
                 aria-label={t.moreOptionsMenu}
               >
                 <MoreVertical className="w-5 h-5 text-slate-700 dark:text-slate-200" />
-                {hasUpdate && (
-                  <span
-                    className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-900 animate-pulse"
-                    aria-label={t.updateAppAvailableBadge}
-                  />
-                )}
               </button>
 
               {/* Condensed 3-Dots Dropdown Options Menu */}
@@ -672,57 +740,7 @@ export default function App() {
                       </div>
                     </button>
 
-                    {/* Option 4: App Live Update Button (تحديث التطبيق) */}
-                    <button
-                      onClick={handleAppUpdateClick}
-                      disabled={isCheckingUpdate || isUpdating}
-                      className={`w-full px-4 py-3 text-xs flex items-center gap-3 transition-colors cursor-pointer text-start border-t border-slate-100 dark:border-slate-800/60 disabled:opacity-60 ${
-                        hasUpdate
-                          ? 'bg-emerald-50/90 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 hover:bg-emerald-100 dark:hover:bg-emerald-900/50'
-                          : 'text-slate-800 dark:text-slate-200 hover:bg-emerald-50/60 dark:hover:bg-emerald-950/40'
-                      }`}
-                    >
-                      <div
-                        className={`p-1.5 rounded-xl shrink-0 ${
-                          hasUpdate
-                            ? 'bg-emerald-600 text-white shadow-xs'
-                            : 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-400'
-                        }`}
-                      >
-                        <RefreshCw
-                          className={`w-4 h-4 ${
-                            isCheckingUpdate || isUpdating ? 'animate-spin' : ''
-                          }`}
-                        />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-1.5">
-                          <span className="font-bold block">{t.updateAppTitle}</span>
-                          {hasUpdate && (
-                            <span className="text-[9px] font-extrabold bg-emerald-600 text-white px-1.5 py-0.5 rounded-full shrink-0 animate-pulse">
-                              {t.updateAppAvailableBadge}
-                            </span>
-                          )}
-                        </div>
-                        <span
-                          className={`text-[10px] block leading-snug ${
-                            hasUpdate
-                              ? 'text-emerald-700 dark:text-emerald-300 font-semibold'
-                              : 'text-slate-400'
-                          }`}
-                        >
-                          {isUpdating
-                            ? t.updateAppUpdating
-                            : isCheckingUpdate
-                            ? t.updateAppChecking
-                            : hasUpdate
-                            ? t.updateAppAvailableDesc
-                            : t.updateAppCheckDesc}
-                        </span>
-                      </div>
-                    </button>
-
-                    {/* Option 5: PWA Install Button */}
+                    {/* Option 4: PWA Install Button */}
                     <div className="px-3">
                       <PWAInstallButton />
                     </div>
@@ -773,6 +791,41 @@ export default function App() {
           </header>
 
           <main className="p-4 space-y-4 max-w-4xl mx-auto w-full flex-1">
+            {/* 0. APP UPDATE AVAILABLE GREEN RECTANGLE BANNER */}
+            {hasUpdate && (
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={handleHomeUpdateInstall}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleHomeUpdateInstall();
+                  }
+                }}
+                className="bg-emerald-100 dark:bg-emerald-950/70 border-2 border-emerald-500 dark:border-emerald-400 text-emerald-950 dark:text-emerald-100 rounded-2xl p-4 shadow-sm cursor-pointer hover:bg-emerald-200/80 dark:hover:bg-emerald-900/70 active:scale-[0.99] transition-all animate-in fade-in duration-200"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="p-2 bg-emerald-600 text-white rounded-xl shadow-xs shrink-0">
+                      <RefreshCw className={`w-4 h-4 ${isUpdating ? 'animate-spin' : ''}`} />
+                    </div>
+                    <div className="min-w-0">
+                      <h3 className="text-xs font-extrabold text-emerald-950 dark:text-emerald-100 leading-snug">
+                        {t.homeUpdateBannerTitle}
+                      </h3>
+                      <p className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-300 mt-0.5">
+                        {isUpdating ? t.updateAppUpdating : t.homeUpdateBannerDesc}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-extrabold bg-emerald-600 text-white px-2.5 py-1 rounded-xl shrink-0 shadow-xs">
+                    {isUpdating ? t.updateAppUpdating : t.updateAppAvailableBadge}
+                  </span>
+                </div>
+              </div>
+            )}
+
             {/* 0.A DIRECT CLIENT MESSAGE FROM MANAGER IN YELLOW RECTANGLE */}
             {subscriptionState.adminMessage && (
               <div className="bg-yellow-100 dark:bg-amber-950/60 border-2 border-yellow-400 dark:border-amber-500 text-amber-950 dark:text-amber-100 rounded-2xl p-4 shadow-sm animate-in fade-in duration-200">
@@ -1077,7 +1130,8 @@ export default function App() {
                   {dayPatients.map(({ patient: p, isNewExamOnDay, isFollowUpOnDay, followUpCountOnDay }) => (
                     <div
                       key={p.id}
-                      className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 p-2.5 rounded-2xl transition-colors"
+                      onClick={() => handleOpenPatient(p.id, 'view')}
+                      className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 hover:bg-sky-50/60 dark:hover:bg-slate-800/50 p-2.5 rounded-2xl transition-colors cursor-pointer active:scale-[0.995]"
                     >
                       <div className="space-y-1">
                         <div className="flex items-center gap-2 flex-wrap">
@@ -1122,20 +1176,15 @@ export default function App() {
 
                       <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
                         <button
-                          onClick={() => handleOpenPatient(p.id, 'add-followup')}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenPatient(p.id, 'add-followup');
+                          }}
                           className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
                           title={t.addFollowUp}
                         >
                           <PlusCircle className="w-3.5 h-3.5" />
                           <span>{t.addFollowUp}</span>
-                        </button>
-
-                        <button
-                          onClick={() => handleOpenPatient(p.id, 'view')}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-medium rounded-xl transition-colors cursor-pointer"
-                        >
-                          <FileEdit className="w-3.5 h-3.5" />
-                          <span>{t.openFile}</span>
                         </button>
                       </div>
                     </div>

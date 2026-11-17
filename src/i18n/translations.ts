@@ -120,6 +120,7 @@ export const translations = {
     patientFollowUps: 'متابعات المريض',
     imagesAndScans: 'الصور والأشعة',
     newFollowUpBtn: 'متابعة جديدة (+)',
+    recordedBadge: 'مسجل',
 
     // Patient Form Demographics
     demographicsSection: 'البيانات التعريفية للمريض',
@@ -293,6 +294,8 @@ export const translations = {
     // Toasts & Messages
     toastSavedPatient: 'تم حفظ وتحديث ملف المريض بنجاح!',
     toastAutoSavedOnBack: 'تم الحفظ التلقائي للتغييرات في السجل المحلي',
+    autoSavingLabel: 'جاري الحفظ التلقائي...',
+    autoSavedLiveBadge: 'حفظ تلقائي ✓',
     toastAutoBackupSuccess: 'تم تنفيذ النسخ الاحتياطي التلقائي اليومي (الساعة 4:00 عصراً) بنجاح!',
     toastSavedAndWordExported: 'تم حفظ الملف وتنزيل نسخة Word (.docx) على جهازك فوراً!',
     toastWordExportError: 'تم حفظ الملف محلياً، تعذر تصدير ملف Word.',
@@ -307,7 +310,7 @@ export const translations = {
     // Statistics & PWA & Offline
     analyticsIcon: 'الإحصائية',
     analyticsBtnTooltip: 'عرض الإحصائية والمخططات البيانية',
-    analyticsModalSubtitle: 'رسم بياني لنمو المرضى وتوزيع الفئات العمرية للمرضى المسجلين',
+    analyticsModalSubtitle: 'رسم بياني لحركة تسجيل المرضى خلال فترة استخدام العيادة',
     closeAnalytics: 'إغلاق الإحصائية',
     analyticsDataLocalNotice: 'جميع المؤشرات تُحسب محلياً وفورياً من سجلات العيادة على جهازك',
     offlineWorkingTitle: 'يعمل محلياً بدون إنترنت',
@@ -322,13 +325,15 @@ export const translations = {
     installIOSStep2: 'مرر لأسفل واضغط على "إضافة إلى الشاشة الرئيسية" (Add to Home Screen).',
     installIOSStep3: 'اضغط "إضافة" في الزاوية العلوية ليفتح التطبيق كبرنامج مستقل بدون متصفح.',
 
-    // App Live Update (زر التحديث الفوري)
+    // App Live Update (بنر التحديث الأخضر على الرئيسية)
+    homeUpdateBannerTitle: 'يتوفر تحديث جديد لتطبيق Easy clinic',
+    homeUpdateBannerDesc: 'اضغط هنا لتثبيت التحديث الجديد فوراً',
     updateAppTitle: 'تحديث التطبيق',
     updateAppAvailableBadge: 'تحديث جديد',
     updateAppAvailableDesc: 'يتوفر تحديث جديد الآن — اضغط لتطبيقه فوراً دون الخروج',
     updateAppCheckDesc: 'جلب آخر التحديثات دون الخروج من الرابط',
     updateAppChecking: 'جاري التحقق من التحديثات...',
-    updateAppUpdating: 'جاري تحديث التطبيق...',
+    updateAppUpdating: 'جاري تثبيت التحديث...',
     updateAppUpToDateToast: 'أنت تستخدم أحدث إصدار من التطبيق حالياً',
     updateAppOfflineToast: 'أنت تعمل بدون إنترنت — يرجى الاتصال بالشبكة لجلب التحديثات',
 
@@ -502,6 +507,7 @@ export const translations = {
     patientFollowUps: 'Follow-ups',
     imagesAndScans: 'Photos & Scans',
     newFollowUpBtn: 'New Follow-up (+)',
+    recordedBadge: 'Recorded',
 
     // Patient Form Demographics
     demographicsSection: 'Patient Identification & Demographics',
@@ -675,6 +681,8 @@ export const translations = {
     // Toasts & Messages
     toastSavedPatient: 'Patient file saved and updated successfully!',
     toastAutoSavedOnBack: 'Changes auto-saved to local clinic storage',
+    autoSavingLabel: 'Auto-saving...',
+    autoSavedLiveBadge: 'Auto-saved ✓',
     toastAutoBackupSuccess: 'Daily 4:00 PM automatic backup completed successfully!',
     toastSavedAndWordExported: 'File saved & Word (.docx) copy downloaded immediately!',
     toastWordExportError: 'Record saved locally, failed to export Word file.',
@@ -689,7 +697,7 @@ export const translations = {
     // Statistics & PWA & Offline
     analyticsIcon: 'Statistics',
     analyticsBtnTooltip: 'View clinic statistics and charts',
-    analyticsModalSubtitle: 'Patient growth chart and registered age group distribution',
+    analyticsModalSubtitle: 'Patient registration growth chart during clinic usage period',
     closeAnalytics: 'Close Statistics',
     analyticsDataLocalNotice: 'All indicators are computed locally in real-time from records on your device',
     offlineWorkingTitle: 'Works 100% Offline Locally',
@@ -705,12 +713,14 @@ export const translations = {
     installIOSStep3: 'Tap "Add" in the top corner to launch as an offline standalone app.',
 
     // App Live Update
+    homeUpdateBannerTitle: 'A new update is available for Easy clinic',
+    homeUpdateBannerDesc: 'Tap here to install the update immediately',
     updateAppTitle: 'Update App',
     updateAppAvailableBadge: 'New Update',
     updateAppAvailableDesc: 'New update ready — tap to apply immediately without leaving',
     updateAppCheckDesc: 'Fetch latest updates without exiting the app',
     updateAppChecking: 'Checking for updates...',
-    updateAppUpdating: 'Updating application...',
+    updateAppUpdating: 'Installing update...',
     updateAppUpToDateToast: 'You are already using the latest version',
     updateAppOfflineToast: 'You are offline — connect to the internet to fetch updates',
 

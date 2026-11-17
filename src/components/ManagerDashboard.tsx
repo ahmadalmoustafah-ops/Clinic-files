@@ -17,10 +17,16 @@ import {
   X,
   AlertCircle,
   Stethoscope,
+  Megaphone,
+  CheckSquare,
+  Square,
+  FileText,
+  ArrowUpDown,
 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 import { AuthService } from '../services/authService';
 import { SubscriptionService } from '../services/subscriptionService';
+import { StorageService } from '../services/storageService';
 
 interface ManagedSubscription {
   id: string;
@@ -28,6 +34,7 @@ interface ManagedSubscription {
   status: 'active' | 'suspended';
   adminMessage: string;
   adminMessageUpdatedAt: string | null;
+  filesCount: number;
   createdAt: string;
   lastSeenAt: string;
 }
@@ -123,18 +130,27 @@ export const ManagerDashboard: React.FC = () => {
   const [authLoading, setAuthLoading] = useState(false);
 
   const [subscriptions, setSubscriptions] = useState<ManagedSubscription[]>([]);
-  const [counts, setCounts] = useState({ total: 0, active: 0, suspended: 0 });
+  const [counts, setCounts] = useState({ total: 0, active: 0, suspended: 0, totalFiles: 0 });
+  const [sortBy, setSortBy] = useState<'recent' | 'engagement'>('recent');
   const [loadingList, setLoadingList] = useState(false);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  // Message modal state
+  // Message modal state (single account)
   const [messageTarget, setMessageTarget] = useState<ManagedSubscription | null>(null);
   const [messageText, setMessageText] = useState('');
   const [messageError, setMessageError] = useState<string | null>(null);
   const [sendingMessage, setSendingMessage] = useState(false);
+
+  // Bulk / Broadcast message state (all or selected accounts)
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [bulkScope, setBulkScope] = useState<'all' | 'selected'>('all');
+  const [bulkMessageText, setBulkMessageText] = useState('');
+  const [bulkMessageError, setBulkMessageError] = useState<string | null>(null);
+  const [sendingBulk, setSendingBulk] = useState(false);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -188,12 +204,24 @@ export const ManagerDashboard: React.FC = () => {
     }
   }, []);
 
+  const syncLocalAccountsWithCounts = useCallback(async () => {
+    const summaries = AuthService.getAllAccountSummaries();
+    if (!summaries.length) return;
+    const enriched = await Promise.all(
+      summaries.map(async (acc) => ({
+        ...acc,
+        filesCount: await StorageService.getPatientCountForUser(acc.id),
+      }))
+    );
+    await SubscriptionService.syncAllAccounts(enriched);
+  }, []);
+
   const fetchSubscriptions = useCallback(async (activeToken: string) => {
     setLoadingList(true);
     setFetchError(null);
     try {
-      // Ensure any locally registered accounts in this browser are synced before listing
-      await SubscriptionService.syncAllAccounts(AuthService.getAllAccountSummaries());
+      // Ensure any locally registered accounts in this browser sync their latest file counts (zero content)
+      await syncLocalAccountsWithCounts();
 
       const res = await fetch(`/api/manager/subscriptions?_t=${Date.now()}`, {
         headers: { Authorization: `Bearer ${activeToken}` },
@@ -214,13 +242,18 @@ export const ManagerDashboard: React.FC = () => {
         totalCount: number;
         activeCount: number;
         suspendedCount: number;
+        totalFilesCount?: number;
         subscriptions: ManagedSubscription[];
       };
-      setSubscriptions(data.subscriptions || []);
+      const list = data.subscriptions || [];
+      setSubscriptions(list);
+      setSelectedIds((prev) => prev.filter((id) => list.some((s) => s.id === id)));
+      const computedFiles = list.reduce((sum, s) => sum + (s.filesCount || 0), 0);
       setCounts({
         total: data.totalCount || 0,
         active: data.activeCount || 0,
         suspended: data.suspendedCount || 0,
+        totalFiles: typeof data.totalFilesCount === 'number' ? data.totalFilesCount : computedFiles,
       });
       setHasLoadedOnce(true);
     } catch {
@@ -232,12 +265,12 @@ export const ManagerDashboard: React.FC = () => {
     } finally {
       setLoadingList(false);
     }
-  }, [isAr]);
+  }, [isAr, syncLocalAccountsWithCounts]);
 
   useEffect(() => {
     document.title = 'Easy clinic manager';
-    SubscriptionService.syncAllAccounts(AuthService.getAllAccountSummaries());
-  }, []);
+    syncLocalAccountsWithCounts();
+  }, [syncLocalAccountsWithCounts]);
 
   useEffect(() => {
     if (!token) {
@@ -464,7 +497,93 @@ export const ManagerDashboard: React.FC = () => {
     setHasLoadedOnce(false);
   };
 
+  const toggleSelectAccount = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAllAccounts = () => {
+    if (selectedIds.length === subscriptions.length && subscriptions.length > 0) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(subscriptions.map((s) => s.id));
+    }
+  };
+
+  const openBulkMessageModal = (preferredScope?: 'all' | 'selected') => {
+    const scope =
+      preferredScope || (selectedIds.length > 0 && selectedIds.length < subscriptions.length ? 'selected' : 'all');
+    setBulkScope(scope);
+    setBulkMessageText('');
+    setBulkMessageError(null);
+    setIsBulkModalOpen(true);
+  };
+
+  const handleSendBulkMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || sendingBulk) return;
+
+    const trimmed = bulkMessageText.trim();
+    if (!trimmed) {
+      setBulkMessageError(
+        isAr ? 'يرجى كتابة نص الرسالة الجماعية قبل الإرسال.' : 'Please enter a message before sending.'
+      );
+      return;
+    }
+
+    if (bulkScope === 'selected' && selectedIds.length === 0) {
+      setBulkMessageError(
+        isAr
+          ? 'يرجى تحديد حساب اشتراك واحد على الأقل أو اختيار الإرسال لجميع الحسابات.'
+          : 'Please select at least one account or switch to All Accounts.'
+      );
+      return;
+    }
+
+    setSendingBulk(true);
+    setBulkMessageError(null);
+    try {
+      const res = await fetch('/api/manager/subscriptions/bulk-message', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          sendToAll: bulkScope === 'all',
+          subscriptionIds: bulkScope === 'selected' ? selectedIds : undefined,
+          message: trimmed,
+        }),
+      });
+
+      if (res.status === 401) {
+        clearStoredManagerToken();
+        setToken(null);
+        return;
+      }
+
+      if (!res.ok) {
+        const errData = (await res.json()) as { error?: string };
+        setBulkMessageError(errData.error || 'Failed to send bulk message');
+        return;
+      }
+
+      const result = (await res.json()) as { updatedCount?: number };
+      await fetchSubscriptions(token);
+      setIsBulkModalOpen(false);
+      showToast(
+        isAr
+          ? `تم إرسال الرسالة الجماعية إلى (${result.updatedCount ?? 0}) حساب وستظهر في صفحاتهم الرئيسية`
+          : `Broadcast message sent to ${result.updatedCount ?? 0} account(s)`
+      );
+    } finally {
+      setSendingBulk(false);
+    }
+  };
+
   const trimmedLen = messageText.trim().length;
+  const bulkTrimmedLen = bulkMessageText.trim().length;
 
   // --- Seamless Auto-Login Splash while verifying remembered credentials ---
   if (!token && autoLoggingIn) {
@@ -705,13 +824,13 @@ export const ManagerDashboard: React.FC = () => {
           <ShieldCheck className="w-5 h-5 text-sky-600 dark:text-sky-400 shrink-0" />
           <span>
             {isAr
-              ? 'هذه الصفحة مستقلة وتعرض عدد وأسماء حسابات الاشتراك فقط، مع منع تام للاطلاع على أي سجلات مرضى أو ملفات مسجلة داخل الحسابات.'
-              : 'Strict privacy isolation: Only subscriber names and account count are displayed. Patient records and clinic files remain 100% private and inaccessible.'}
+              ? 'هذه الصفحة مستقلة وتعرض أسماء وعدد حسابات الاشتراك وإجمالي عدد الملفات المدخلة فقط لتقييم التفاعل، مع منع تام للاطلاع على محتوى أي ملفات أو بيانات مرضى.'
+              : 'Strict privacy isolation: Only subscriber names, account count, and total entered file counts are displayed to measure engagement. Patient record contents remain 100% private and inaccessible.'}
           </span>
         </div>
 
         {/* Summary Counters */}
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 text-center shadow-xs">
             <span className="text-[11px] text-slate-500 dark:text-slate-400 block font-semibold">
               {isAr ? 'إجمالي حسابات الاشتراك' : 'Total Subscriptions'}
@@ -738,20 +857,89 @@ export const ManagerDashboard: React.FC = () => {
               {counts.suspended}
             </span>
           </div>
+
+          <div className="bg-sky-50/80 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800 rounded-2xl p-4 text-center shadow-xs">
+            <span className="text-[11px] text-sky-700 dark:text-sky-300 block font-bold">
+              {isAr ? 'إجمالي الملفات المدخلة' : 'Total Entered Files'}
+            </span>
+            <span className="text-2xl font-extrabold text-sky-600 dark:text-sky-400 font-mono mt-1 block">
+              {counts.totalFiles}
+            </span>
+          </div>
         </div>
 
         {/* Subscription Accounts List */}
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xs">
-          <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-100 dark:border-slate-800">
+          <div className="flex flex-wrap items-center justify-between gap-2.5 pb-3 mb-3 border-b border-slate-100 dark:border-slate-800">
             <div className="flex items-center gap-2">
               <Users className="w-4 h-4 text-sky-600" />
               <h2 className="text-sm font-extrabold text-slate-900 dark:text-white">
                 {isAr ? 'قائمة حسابات الاشتراك' : 'Subscription Accounts'}
               </h2>
+              <span className="text-xs font-bold text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/60 px-2 py-0.5 rounded-xl border border-sky-200 dark:border-sky-800 font-mono">
+                {counts.total}
+              </span>
             </div>
-            <span className="text-xs font-bold text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/60 px-2.5 py-1 rounded-xl border border-sky-200 dark:border-sky-800 font-mono">
-              {counts.total}
-            </span>
+
+            {subscriptions.length > 0 && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setSortBy((prev) => (prev === 'recent' ? 'engagement' : 'recent'))}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-sky-50 dark:bg-sky-950/50 hover:bg-sky-100 dark:hover:bg-sky-900/60 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 rounded-xl text-[11px] font-bold cursor-pointer transition-colors"
+                  title={isAr ? 'تبديل ترتيب الحسابات لتقييم التفاعل' : 'Toggle sort order'}
+                >
+                  <ArrowUpDown className="w-3.5 h-3.5" />
+                  <span>
+                    {sortBy === 'engagement'
+                      ? isAr
+                        ? 'ترتيب: الأكثر تفاعلاً'
+                        : 'Sort: Most Active'
+                      : isAr
+                      ? 'ترتيب: الأحدث اشتراكاً'
+                      : 'Sort: Newest'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={toggleSelectAllAccounts}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-[11px] font-bold cursor-pointer transition-colors"
+                >
+                  {selectedIds.length === subscriptions.length && subscriptions.length > 0 ? (
+                    <CheckSquare className="w-3.5 h-3.5 text-sky-600" />
+                  ) : (
+                    <Square className="w-3.5 h-3.5 text-slate-400" />
+                  )}
+                  <span>
+                    {selectedIds.length === subscriptions.length && subscriptions.length > 0
+                      ? isAr
+                        ? 'إلغاء تحديد الكل'
+                        : 'Clear Selection'
+                      : isAr
+                      ? 'تحديد الكل'
+                      : 'Select All'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => openBulkMessageModal()}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-400 hover:bg-amber-500 text-amber-950 rounded-xl text-xs font-extrabold shadow-xs cursor-pointer transition-all active:scale-95"
+                >
+                  <Megaphone className="w-3.5 h-3.5" />
+                  <span>
+                    {selectedIds.length > 0 && selectedIds.length < subscriptions.length
+                      ? isAr
+                        ? `رسالة جماعية (${selectedIds.length})`
+                        : `Bulk Message (${selectedIds.length})`
+                      : isAr
+                      ? 'رسالة جماعية'
+                      : 'Broadcast Message'}
+                  </span>
+                </button>
+              </div>
+            )}
           </div>
 
           {fetchError && (
@@ -788,15 +976,59 @@ export const ManagerDashboard: React.FC = () => {
             </div>
           ) : (
             <div className="divide-y divide-slate-100 dark:divide-slate-800">
-              {subscriptions.map((sub, index) => {
+              {(sortBy === 'engagement'
+                ? [...subscriptions].sort((a, b) => (b.filesCount || 0) - (a.filesCount || 0))
+                : subscriptions
+              ).map((sub, index) => {
                 const isActive = sub.status === 'active';
+                const isSelected = selectedIds.includes(sub.id);
+                const filesCount = sub.filesCount || 0;
+                const engagementLabel =
+                  filesCount === 0
+                    ? isAr
+                      ? 'بدون ملفات بعد'
+                      : 'No files yet'
+                    : filesCount < 10
+                    ? isAr
+                      ? 'تفاعل مبدئي'
+                      : 'Starter'
+                    : filesCount < 30
+                    ? isAr
+                      ? 'تفاعل متوسط'
+                      : 'Moderate'
+                    : isAr
+                    ? 'تفاعل عالٍ'
+                    : 'High Engagement';
+                const engagementClasses =
+                  filesCount === 0
+                    ? 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700'
+                    : filesCount < 10
+                    ? 'bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/60 dark:text-sky-300 dark:border-sky-800'
+                    : filesCount < 30
+                    ? 'bg-teal-50 text-teal-700 border-teal-200 dark:bg-teal-950/60 dark:text-teal-300 dark:border-teal-800'
+                    : 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800';
+
                 return (
                   <div
                     key={sub.id}
-                    className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                    className={`py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-2 rounded-2xl transition-colors ${
+                      isSelected ? 'bg-amber-50/50 dark:bg-amber-950/20' : ''
+                    }`}
                   >
-                    <div className="space-y-1 min-w-0">
+                    <div className="space-y-1.5 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => toggleSelectAccount(sub.id)}
+                          className="text-slate-400 hover:text-amber-600 dark:hover:text-amber-400 cursor-pointer shrink-0 p-0.5"
+                          title={isAr ? 'تحديد لإرسال رسالة جماعية' : 'Select for bulk message'}
+                        >
+                          {isSelected ? (
+                            <CheckSquare className="w-4 h-4 text-amber-500" />
+                          ) : (
+                            <Square className="w-4 h-4" />
+                          )}
+                        </button>
                         <span className="w-6 h-6 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs font-bold font-mono flex items-center justify-center shrink-0">
                           {index + 1}
                         </span>
@@ -820,12 +1052,28 @@ export const ManagerDashboard: React.FC = () => {
                         </span>
                       </div>
 
-                      <p className="text-[11px] text-slate-400">
-                        {isAr ? 'تاريخ الاشتراك:' : 'Subscribed:'}{' '}
-                        <span className="font-mono">
-                          {new Date(sub.createdAt).toLocaleDateString(isAr ? 'ar-EG' : 'en-US')}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="inline-flex items-center gap-1.5 text-[11px] font-extrabold px-2.5 py-0.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                          <FileText className="w-3.5 h-3.5 shrink-0" />
+                          <span>
+                            {isAr ? 'عدد الملفات المدخلة:' : 'Total Files:'}{' '}
+                            <span className="font-mono">{filesCount}</span>
+                          </span>
                         </span>
-                      </p>
+
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-xl border ${engagementClasses}`}
+                        >
+                          {engagementLabel}
+                        </span>
+
+                        <span className="text-[11px] text-slate-400">
+                          {isAr ? 'تاريخ الاشتراك:' : 'Subscribed:'}{' '}
+                          <span className="font-mono">
+                            {new Date(sub.createdAt).toLocaleDateString(isAr ? 'ar-EG' : 'en-US')}
+                          </span>
+                        </span>
+                      </div>
 
                       {sub.adminMessage && (
                         <div className="mt-1.5 inline-flex items-start gap-1.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700 text-amber-900 dark:text-amber-200 rounded-xl px-2.5 py-1.5 text-[11px] max-w-lg">
@@ -982,6 +1230,180 @@ export const ManagerDashboard: React.FC = () => {
                     <span>{isAr ? 'إرسال للعميل' : 'Send Message'}</span>
                   </button>
                 </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* Bulk / Broadcast Message Modal */}
+      {isBulkModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] flex flex-col">
+            <div className="bg-amber-400 text-amber-950 px-5 py-4 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2.5">
+                <Megaphone className="w-5 h-5" />
+                <div>
+                  <h3 className="text-sm font-extrabold">
+                    {isAr ? 'رسالة جماعية للمشتركين' : 'Broadcast / Bulk Message'}
+                  </h3>
+                  <p className="text-[11px] font-semibold opacity-90">
+                    {bulkScope === 'all'
+                      ? isAr
+                        ? `سيتم الإرسال لجميع الحسابات (${subscriptions.length})`
+                        : `Sending to all accounts (${subscriptions.length})`
+                      : isAr
+                      ? `سيتم الإرسال لـ (${selectedIds.length}) حساب محدد`
+                      : `Sending to ${selectedIds.length} selected account(s)`}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsBulkModalOpen(false)}
+                className="p-1.5 hover:bg-black/10 rounded-xl cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSendBulkMessage} className="p-5 space-y-3.5 overflow-y-auto">
+              {bulkMessageError && (
+                <div className="bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 rounded-2xl p-2.5 text-xs font-semibold">
+                  {bulkMessageError}
+                </div>
+              )}
+
+              {/* Target Scope Selector: All vs Selected Subset */}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setBulkScope('all')}
+                  className={`py-2 px-3 rounded-2xl text-xs font-extrabold border transition-all cursor-pointer ${
+                    bulkScope === 'all'
+                      ? 'bg-amber-400 border-amber-500 text-amber-950 shadow-xs'
+                      : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                  }`}
+                >
+                  {isAr
+                    ? `جميع الحسابات (${subscriptions.length})`
+                    : `All Accounts (${subscriptions.length})`}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setBulkScope('selected')}
+                  className={`py-2 px-3 rounded-2xl text-xs font-extrabold border transition-all cursor-pointer ${
+                    bulkScope === 'selected'
+                      ? 'bg-amber-400 border-amber-500 text-amber-950 shadow-xs'
+                      : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                  }`}
+                >
+                  {isAr
+                    ? `حسابات محددة (${selectedIds.length})`
+                    : `Selected (${selectedIds.length})`}
+                </button>
+              </div>
+
+              {/* Account Selector Checklist when 'selected' is active */}
+              {bulkScope === 'selected' && (
+                <div className="border border-slate-200 dark:border-slate-700 rounded-2xl p-2.5 max-h-40 overflow-y-auto space-y-1 bg-slate-50 dark:bg-slate-800/40">
+                  <div className="flex items-center justify-between px-1 pb-1.5 border-b border-slate-200/70 dark:border-slate-700/70">
+                    <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
+                      {isAr ? 'اختر الحسابات المستهدفة:' : 'Choose target accounts:'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={toggleSelectAllAccounts}
+                      className="text-[11px] font-bold text-sky-600 dark:text-sky-400 cursor-pointer"
+                    >
+                      {selectedIds.length === subscriptions.length
+                        ? isAr
+                          ? 'إلغاء الكل'
+                          : 'Unselect all'
+                        : isAr
+                        ? 'تحديد الكل'
+                        : 'Select all'}
+                    </button>
+                  </div>
+                  {subscriptions.map((sub) => {
+                    const checked = selectedIds.includes(sub.id);
+                    return (
+                      <label
+                        key={sub.id}
+                        className="flex items-center gap-2 px-2 py-1.5 rounded-xl hover:bg-white dark:hover:bg-slate-800 cursor-pointer text-xs"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleSelectAccount(sub.id)}
+                          className="w-4 h-4 rounded accent-amber-500 cursor-pointer"
+                        />
+                        <span className="font-bold text-slate-800 dark:text-slate-200 truncate">
+                          {sub.fullName}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div>
+                <div className="flex items-center justify-between text-xs mb-1.5">
+                  <label className="font-bold text-slate-700 dark:text-slate-300">
+                    {isAr
+                      ? 'نص الرسالة الجماعية (تظهر في مستطيل أصفر على الرئيسية):'
+                      : 'Broadcast message (shown in yellow box on Home):'}
+                  </label>
+                  <span className="font-mono font-bold text-[11px] text-slate-500 dark:text-slate-400">
+                    {bulkTrimmedLen} {isAr ? 'حرف' : 'chars'}
+                  </span>
+                </div>
+
+                <textarea
+                  rows={4}
+                  value={bulkMessageText}
+                  onChange={(e) => setBulkMessageText(e.target.value)}
+                  placeholder={
+                    isAr
+                      ? 'اكتب الرسالة لإرسالها للحسابات المختارة...'
+                      : 'Write broadcast message...'
+                  }
+                  className="w-full p-3.5 text-xs bg-amber-50/40 dark:bg-slate-800 border border-amber-300 dark:border-slate-700 rounded-2xl focus:outline-none focus:ring-2 focus:ring-amber-400 leading-relaxed"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsBulkModalOpen(false)}
+                  className="px-3.5 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-bold cursor-pointer"
+                >
+                  {isAr ? 'إلغاء' : 'Cancel'}
+                </button>
+                <button
+                  type="submit"
+                  disabled={
+                    sendingBulk ||
+                    bulkTrimmedLen === 0 ||
+                    (bulkScope === 'selected' && selectedIds.length === 0)
+                  }
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-amber-400 hover:bg-amber-500 disabled:opacity-50 text-amber-950 rounded-xl text-xs font-extrabold cursor-pointer shadow-xs"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>
+                    {sendingBulk
+                      ? isAr
+                        ? 'جاري الإرسال...'
+                        : 'Sending...'
+                      : bulkScope === 'all'
+                      ? isAr
+                        ? `إرسال للجميع (${subscriptions.length})`
+                        : `Send to All (${subscriptions.length})`
+                      : isAr
+                      ? `إرسال لـ (${selectedIds.length}) حساب`
+                      : `Send to (${selectedIds.length})`}
+                  </span>
+                </button>
               </div>
             </form>
           </div>

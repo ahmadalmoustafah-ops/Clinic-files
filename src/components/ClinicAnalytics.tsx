@@ -9,12 +9,8 @@ import {
   YAxis,
   Tooltip,
   CartesianGrid,
-  PieChart,
-  Pie,
-  Cell,
-  Legend,
 } from 'recharts';
-import { TrendingUp, PieChart as PieChartIcon, Calendar, Clock } from 'lucide-react';
+import { TrendingUp, Calendar, Clock } from 'lucide-react';
 import { PatientRecord } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import {
@@ -28,8 +24,6 @@ import {
 interface ClinicAnalyticsProps {
   patients: PatientRecord[];
 }
-
-const AGE_COLORS = ['#0284c7', '#0d9488', '#f59e0b', '#8b5cf6', '#94a3b8'];
 
 export const ClinicAnalytics: React.FC<ClinicAnalyticsProps> = ({ patients }) => {
   const { t, isRTL, language } = useLanguage();
@@ -123,58 +117,6 @@ export const ClinicAnalytics: React.FC<ClinicAnalyticsProps> = ({ patients }) =>
     };
   }, [patients, usageStart, t.months]);
 
-  // 2. Exact Age Group Distribution (no mocked numbers)
-  const { ageDistributionData, mostFrequentSummary } = useMemo(() => {
-    if (patients.length === 0) {
-      return {
-        ageDistributionData: [] as { name: string; value: number; color: string }[],
-        mostFrequentSummary: t.noAgeDataYet,
-      };
-    }
-
-    let kids = 0; // 0 - 18
-    let youth = 0; // 19 - 35
-    let middle = 0; // 36 - 55
-    let seniors = 0; // 56+
-    let unspecified = 0;
-
-    patients.forEach((p) => {
-      const digits = p.age?.replace(/\D/g, '') || '';
-      const ageNum = parseInt(digits, 10);
-      if (digits && !isNaN(ageNum) && ageNum >= 0 && ageNum <= 130) {
-        if (ageNum <= 18) kids++;
-        else if (ageNum <= 35) youth++;
-        else if (ageNum <= 55) middle++;
-        else seniors++;
-      } else {
-        unspecified++;
-      }
-    });
-
-    const buckets = [
-      { name: t.ageKids, value: kids, color: AGE_COLORS[0], isKnown: true },
-      { name: t.ageYouth, value: youth, color: AGE_COLORS[1], isKnown: true },
-      { name: t.ageAdults, value: middle, color: AGE_COLORS[2], isKnown: true },
-      { name: t.ageSeniors, value: seniors, color: AGE_COLORS[3], isKnown: true },
-      { name: t.ageUnspecified, value: unspecified, color: AGE_COLORS[4], isKnown: false },
-    ].filter((item) => item.value > 0);
-
-    const knownBuckets = buckets.filter((b) => b.isKnown);
-    const rankedPool = knownBuckets.length > 0 ? knownBuckets : buckets;
-    const top = rankedPool.reduce(
-      (best, cur) => (cur.value > best.value ? cur : best),
-      rankedPool[0]
-    );
-
-    const pct = Math.round((top.value / patients.length) * 100);
-    const summary = `${top.name} (${top.value} · ${pct}%)`;
-
-    return {
-      ageDistributionData: buckets.map(({ name, value, color }) => ({ name, value, color })),
-      mostFrequentSummary: summary,
-    };
-  }, [patients, t.ageKids, t.ageYouth, t.ageAdults, t.ageSeniors, t.ageUnspecified, t.noAgeDataYet]);
-
   return (
     <div className="space-y-4">
       {/* Section Header */}
@@ -188,7 +130,7 @@ export const ClinicAnalytics: React.FC<ClinicAnalyticsProps> = ({ patients }) =>
         <span className="text-[11px] text-slate-400">{t.liveAnalysis}</span>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4">
         {/* Chart 1: Actual Patient Registrations Over Real Usage Period */}
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-4 shadow-xs">
           <div className="flex items-center justify-between gap-2 mb-3 pb-2 border-b border-slate-100 dark:border-slate-800">
@@ -313,89 +255,6 @@ export const ClinicAnalytics: React.FC<ClinicAnalyticsProps> = ({ patients }) =>
             <span className="inline-flex items-center gap-1 font-semibold text-sky-700 dark:text-sky-400">
               <Clock className="w-3 h-3" />
               {t.growthRate} {usageDurationText}
-            </span>
-          </div>
-        </div>
-
-        {/* Chart 2: Actual Age Demographics Distribution */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-4 shadow-xs">
-          <div className="flex items-center justify-between gap-2 mb-3 pb-2 border-b border-slate-100 dark:border-slate-800">
-            <div className="flex items-center gap-2 min-w-0">
-              <PieChartIcon className="w-4 h-4 text-teal-600 shrink-0" />
-              <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">
-                {t.ageDistributionTitle}
-              </h4>
-            </div>
-            <span className="text-[10px] text-teal-700 bg-teal-50 dark:bg-teal-950 dark:text-teal-300 px-2 py-0.5 rounded-full font-semibold shrink-0">
-              {t.clinicalDemographics} ({patients.length})
-            </span>
-          </div>
-
-          <div className="h-56 w-full flex items-center justify-center" dir="ltr">
-            {ageDistributionData.length === 0 ? (
-              <p className="text-xs text-slate-400 text-center px-4" dir={isRTL ? 'rtl' : 'ltr'}>
-                {t.noAgeDataYet}
-              </p>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={ageDistributionData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={50}
-                    outerRadius={75}
-                    paddingAngle={ageDistributionData.length > 1 ? 4 : 0}
-                    dataKey="value"
-                  >
-                    {ageDistributionData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    content={({ active, payload }) => {
-                      if (active && payload && payload.length) {
-                        const data = payload[0];
-                        return (
-                          <div
-                            className={`bg-slate-900 text-white text-xs p-2.5 rounded-xl shadow-xl border border-slate-800 ${
-                              isRTL ? 'text-right' : 'text-left'
-                            }`}
-                            dir={isRTL ? 'rtl' : 'ltr'}
-                          >
-                            <p className="font-bold text-white mb-0.5">{data.name}</p>
-                            <p className="text-slate-300 font-mono">
-                              {t.patientsStat}:{' '}
-                              <span className="font-bold text-teal-400">{data.value}</span>
-                            </p>
-                          </div>
-                        );
-                      }
-                      return null;
-                    }}
-                  />
-                  <Legend
-                    verticalAlign="bottom"
-                    height={36}
-                    iconType="circle"
-                    iconSize={8}
-                    formatter={(value) => (
-                      <span className="text-[11px] text-slate-600 dark:text-slate-300 px-1 font-sans">
-                        {value}
-                      </span>
-                    )}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-
-          <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 mt-2 px-1 gap-2 flex-wrap">
-            <span>
-              {t.mostVisitedGroup} <strong className="text-slate-700 dark:text-slate-200">{mostFrequentSummary}</strong>
-            </span>
-            <span>
-              {t.recordsAnalyzed} <strong className="font-mono">{patients.length}</strong>
             </span>
           </div>
         </div>

@@ -3,16 +3,16 @@ import {
   Search,
   User,
   PlusCircle,
-  FileEdit,
   Stethoscope,
   X,
   Calendar,
   Sparkles,
   HeartPulse,
-  History,
 } from 'lucide-react';
 import { PatientRecord } from '../types';
 import { useLanguage } from '../context/LanguageContext';
+import { useBackHandler } from '../services/navigationHistory';
+import { stripHtmlToPlainText } from '../utils/richTextUtils';
 
 interface SmartSearchBarProps {
   patients: PatientRecord[];
@@ -114,6 +114,14 @@ export const SmartSearchBar: React.FC<SmartSearchBarProps> = ({
       })
       .filter((item) => item.isMatch);
   }, [patients, query, normalizedQuery, dateQuery]);
+
+  useBackHandler(
+    'smart-search-dropdown',
+    isOpen && query.trim().length > 0,
+    () => {
+      setIsOpen(false);
+    }
+  );
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -278,7 +286,8 @@ export const SmartSearchBar: React.FC<SmartSearchBarProps> = ({
                 ({ patient, isNewExamOnDate, hasFollowUpOnDate, matchingFollowUps }) => (
                   <div
                     key={patient.id}
-                    className="p-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors flex flex-col gap-2.5"
+                    onClick={() => handleSelect(patient.id, 'view')}
+                    className="p-3.5 hover:bg-sky-50/70 dark:hover:bg-slate-800/60 transition-colors flex flex-col gap-2.5 cursor-pointer"
                   >
                     <div className="flex items-start justify-between">
                       <div>
@@ -333,10 +342,12 @@ export const SmartSearchBar: React.FC<SmartSearchBarProps> = ({
                               متابعة مسجلة في هذا اليوم:
                             </span>
                             <p className="line-clamp-1 text-[11px] opacity-90 mt-0.5">
-                              {matchingFollowUps[0].clinicalEvolution ||
-                                matchingFollowUps[0].newExam ||
-                                matchingFollowUps[0].treatment ||
-                                matchingFollowUps[0].date}
+                              {stripHtmlToPlainText(
+                                matchingFollowUps[0].clinicalEvolution ||
+                                  matchingFollowUps[0].newExam ||
+                                  matchingFollowUps[0].treatment ||
+                                  ''
+                              ) || matchingFollowUps[0].date}
                             </p>
                           </div>
                         )}
@@ -346,24 +357,22 @@ export const SmartSearchBar: React.FC<SmartSearchBarProps> = ({
                     {/* Actions for this specific patient */}
                     <div className="flex items-center gap-1.5 pt-1 border-t border-slate-50 dark:border-slate-800/40">
                       <button
-                        onClick={() => handleSelect(patient.id, 'view')}
-                        className="flex-1 inline-flex items-center justify-center gap-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-xs font-medium transition-colors"
-                      >
-                        <FileEdit className="w-3.5 h-3.5 text-sky-600" />
-                        <span>{t.openAndEdit}</span>
-                      </button>
-
-                      <button
-                        onClick={() => handleSelect(patient.id, 'add-followup')}
-                        className="flex-1 inline-flex items-center justify-center gap-1 px-2.5 py-1.5 bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/40 dark:hover:bg-sky-900/60 text-sky-700 dark:text-sky-300 rounded-lg text-xs font-semibold transition-colors"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSelect(patient.id, 'add-followup');
+                        }}
+                        className="flex-1 inline-flex items-center justify-center gap-1 px-2.5 py-1.5 bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/40 dark:hover:bg-sky-900/60 text-sky-700 dark:text-sky-300 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
                       >
                         <PlusCircle className="w-3.5 h-3.5 text-sky-600" />
                         <span>{t.addFollowUp}</span>
                       </button>
 
                       <button
-                        onClick={() => handleSelect(patient.id, 'new-consultation')}
-                        className="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 bg-teal-50 hover:bg-teal-100 dark:bg-teal-950/40 dark:hover:bg-teal-900/60 text-teal-700 dark:text-teal-300 rounded-lg text-xs font-semibold transition-colors"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSelect(patient.id, 'new-consultation');
+                        }}
+                        className="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 bg-teal-50 hover:bg-teal-100 dark:bg-teal-950/40 dark:hover:bg-teal-900/60 text-teal-700 dark:text-teal-300 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
                       >
                         <Stethoscope className="w-3.5 h-3.5 text-teal-600" />
                         <span>{t.newConsultation}</span>

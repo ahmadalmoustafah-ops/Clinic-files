@@ -16,6 +16,7 @@ import {
 } from 'docx';
 import { MedicalImage, PatientRecord } from '../types';
 import { Language, translations } from '../i18n/translations';
+import { parseRichTextLinesForWord } from '../utils/richTextUtils';
 
 interface ProcessedImageData {
   data: Uint8Array;
@@ -148,27 +149,59 @@ function makeTextParagraphs(
   emptyFallback: string,
   options?: { bold?: boolean; color?: string; size?: number }
 ): Paragraph[] {
-  const value = (text || '').trim();
-  const lines = value ? value.split(/\r?\n/) : [emptyFallback];
-  const isEmpty = !value;
+  const lines = parseRichTextLinesForWord(text);
+  const isEmpty = lines.length === 0;
 
-  return lines.map(
-    (line) =>
+  if (isEmpty) {
+    return [
       new Paragraph({
         bidirectional: isRTL,
         alignment: isRTL ? AlignmentType.RIGHT : AlignmentType.LEFT,
         spacing: { before: 40, after: 40, line: 276 },
         children: [
           new TextRun({
-            text: line || ' ',
-            bold: options?.bold ?? false,
-            italics: isEmpty,
-            color: isEmpty ? '94A3B8' : options?.color ?? '1E293B',
-            size: options?.size ?? 21, // 10.5pt
+            text: emptyFallback,
+            bold: false,
+            italics: true,
+            color: '94A3B8',
+            size: options?.size ?? 21,
             font: isRTL ? 'Arial' : 'Calibri',
             rightToLeft: isRTL,
           }),
         ],
+      }),
+    ];
+  }
+
+  return lines.map(
+    (segments) =>
+      new Paragraph({
+        bidirectional: isRTL,
+        alignment: isRTL ? AlignmentType.RIGHT : AlignmentType.LEFT,
+        spacing: { before: 40, after: 40, line: 276 },
+        children:
+          segments.length > 0
+            ? segments.map(
+                (seg) =>
+                  new TextRun({
+                    text: seg.text,
+                    bold: seg.bold ?? options?.bold ?? false,
+                    color: seg.colorHex ?? options?.color ?? '1E293B',
+                    size: options?.size ?? 21, // 10.5pt
+                    font: isRTL ? 'Arial' : 'Calibri',
+                    rightToLeft: isRTL,
+                  })
+              )
+            : [
+                new TextRun({
+                  text: ' ',
+                  bold: options?.bold ?? false,
+                  color: options?.color ?? '1E293B',
+                  size: options?.size ?? 21,
+                  font: isRTL ? 'Arial' : 'Calibri',
+                  rightToLeft: isRTL,
+                }),
+              ],
       })
   );
 }
@@ -204,6 +237,7 @@ interface FieldRowInput {
   label: string;
   value: string;
   highlight?: boolean;
+  boldPurple?: boolean;
 }
 
 function makeKeyValueTable(
@@ -237,7 +271,7 @@ function makeKeyValueTable(
             new TableCell({
               width: { size: 28, type: WidthType.PERCENTAGE },
               shading: {
-                fill: row.highlight ? 'FFF1F2' : labelBgHex,
+                fill: row.highlight ? 'FFF1F2' : row.boldPurple ? 'FAF5FF' : labelBgHex,
                 type: ShadingType.CLEAR,
                 color: 'auto',
               },
@@ -250,7 +284,7 @@ function makeKeyValueTable(
                     new TextRun({
                       text: row.label,
                       bold: true,
-                      color: row.highlight ? 'BE123C' : '0369A1',
+                      color: row.highlight ? 'BE123C' : row.boldPurple ? '7E22CE' : '0369A1',
                       size: 21,
                       font: isRTL ? 'Arial' : 'Calibri',
                       rightToLeft: isRTL,
@@ -270,8 +304,13 @@ function makeKeyValueTable(
                 : undefined,
               margins: { top: 90, bottom: 90, left: 130, right: 130 },
               children: makeTextParagraphs(row.value, isRTL, emptyFallback, {
-                color: row.highlight && row.value.trim() ? '9F1239' : '1E293B',
-                bold: Boolean(row.highlight && row.value.trim()),
+                color:
+                  row.highlight && row.value.trim()
+                    ? '9F1239'
+                    : row.boldPurple
+                    ? '7E22CE'
+                    : '1E293B',
+                bold: Boolean((row.highlight && row.value.trim()) || row.boldPurple),
               }),
             }),
           ],
@@ -490,7 +529,7 @@ export async function exportPatientToWord(
   docChildren.push(
     makeKeyValueTable(
       [
-        { label: t.differentialDiagnosis, value: patient.differentialDiagnosis },
+        { label: t.differentialDiagnosis, value: patient.differentialDiagnosis, boldPurple: true },
         { label: t.waiting, value: patient.waiting },
         { label: t.treatment, value: patient.treatment },
       ],

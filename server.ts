@@ -13,6 +13,7 @@ interface SubscriptionEntry {
   status: 'active' | 'suspended';
   adminMessage: string;
   adminMessageUpdatedAt: string | null;
+  filesCount: number;
   createdAt: string;
   lastSeenAt: string;
 }
@@ -86,7 +87,15 @@ function ensureRegistryFile(): RegistryData {
     return {
       tokenSecret: parsed.tokenSecret || defaultTokenSecret(),
       managerAuth: parsed.managerAuth || null,
-      subscriptions: Array.isArray(parsed.subscriptions) ? parsed.subscriptions : [],
+      subscriptions: Array.isArray(parsed.subscriptions)
+        ? parsed.subscriptions.map((s) => ({
+            ...s,
+            filesCount:
+              typeof s.filesCount === 'number' && Number.isFinite(s.filesCount) && s.filesCount >= 0
+                ? Math.floor(s.filesCount)
+                : 0,
+          }))
+        : [],
     };
   } catch {
     const fallback: RegistryData = {
@@ -201,7 +210,7 @@ async function startServer() {
   // --- Client Subscription Registration & Status Sync (Zero Patient PII) ---
   app.post('/api/subscriptions/register-batch', (req: Request, res: Response) => {
     const body = req.body as {
-      accounts?: Array<{ id?: string; fullName?: string; createdAt?: string }>;
+      accounts?: Array<{ id?: string; fullName?: string; createdAt?: string; filesCount?: number }>;
     };
     const items = Array.isArray(body.accounts) ? body.accounts : [];
     const registry = ensureRegistryFile();
@@ -215,10 +224,22 @@ async function startServer() {
         continue;
       }
 
+      const incomingFilesCount =
+        typeof item?.filesCount === 'number' && Number.isFinite(item.filesCount) && item.filesCount >= 0
+          ? Math.floor(item.filesCount)
+          : null;
+
       const existingIdx = registry.subscriptions.findIndex((s) => s.id === id);
       if (existingIdx >= 0) {
         if (registry.subscriptions[existingIdx].fullName !== fullName) {
           registry.subscriptions[existingIdx].fullName = fullName;
+          changed = true;
+        }
+        if (
+          incomingFilesCount !== null &&
+          registry.subscriptions[existingIdx].filesCount !== incomingFilesCount
+        ) {
+          registry.subscriptions[existingIdx].filesCount = incomingFilesCount;
           changed = true;
         }
       } else {
@@ -228,6 +249,7 @@ async function startServer() {
           status: 'active',
           adminMessage: '',
           adminMessageUpdatedAt: null,
+          filesCount: incomingFilesCount ?? 0,
           createdAt: typeof item?.createdAt === 'string' && item.createdAt ? item.createdAt : nowIso,
           lastSeenAt: nowIso,
         });
@@ -247,6 +269,7 @@ async function startServer() {
       id?: string;
       fullName?: string;
       createdAt?: string;
+      filesCount?: number;
     };
 
     const id = typeof body.id === 'string' ? body.id.trim() : '';
@@ -257,6 +280,11 @@ async function startServer() {
       return;
     }
 
+    const incomingFilesCount =
+      typeof body.filesCount === 'number' && Number.isFinite(body.filesCount) && body.filesCount >= 0
+        ? Math.floor(body.filesCount)
+        : null;
+
     const registry = ensureRegistryFile();
     const nowIso = new Date().toISOString();
     const existingIdx = registry.subscriptions.findIndex((s) => s.id === id);
@@ -265,6 +293,9 @@ async function startServer() {
       // Preserve manager-controlled status and adminMessage strictly
       registry.subscriptions[existingIdx].fullName = fullName;
       registry.subscriptions[existingIdx].lastSeenAt = nowIso;
+      if (incomingFilesCount !== null) {
+        registry.subscriptions[existingIdx].filesCount = incomingFilesCount;
+      }
       saveRegistry(registry);
       const sub = registry.subscriptions[existingIdx];
       res.json({
@@ -272,6 +303,7 @@ async function startServer() {
         status: sub.status,
         adminMessage: sub.adminMessage,
         adminMessageUpdatedAt: sub.adminMessageUpdatedAt,
+        filesCount: sub.filesCount,
       });
       return;
     }
@@ -282,6 +314,7 @@ async function startServer() {
       status: 'active',
       adminMessage: '',
       adminMessageUpdatedAt: null,
+      filesCount: incomingFilesCount ?? 0,
       createdAt: typeof body.createdAt === 'string' && body.createdAt ? body.createdAt : nowIso,
       lastSeenAt: nowIso,
     };
@@ -294,6 +327,7 @@ async function startServer() {
       status: created.status,
       adminMessage: created.adminMessage,
       adminMessageUpdatedAt: created.adminMessageUpdatedAt,
+      filesCount: created.filesCount,
     });
   });
 
@@ -402,17 +436,20 @@ async function startServer() {
         status: s.status,
         adminMessage: s.adminMessage,
         adminMessageUpdatedAt: s.adminMessageUpdatedAt,
+        filesCount: typeof s.filesCount === 'number' ? s.filesCount : 0,
         createdAt: s.createdAt,
         lastSeenAt: s.lastSeenAt,
       }));
 
     const activeCount = list.filter((s) => s.status === 'active').length;
     const suspendedCount = list.filter((s) => s.status === 'suspended').length;
+    const totalFilesCount = list.reduce((sum, s) => sum + s.filesCount, 0);
 
     res.json({
       totalCount: list.length,
       activeCount,
       suspendedCount,
+      totalFilesCount,
       subscriptions: list,
     });
   });
@@ -498,6 +535,58 @@ async function startServer() {
       saveRegistry(registry);
 
       res.json({ id: sub.id, cleared: true });
+    }
+  );
+
+  app.post(
+    '/api/manager/subscriptions/bulk-message',
+    requireManagerAuth,
+    (req: Request, res: Response) => {
+      const body = req.body as {
+        subscriptionIds?: string[];
+        sendToAll?: boolean;
+        message?: string;
+      };
+      const message = typeof body.message === 'string' ? body.message.trim() : '';
+      if (!message) {
+        res.status(400).json({ error: 'Message cannot be empty.' });
+        return;
+      }
+
+      const sendToAll = Boolean(body.sendToAll);
+      const idSet = new Set(
+        Array.isArray(body.subscriptionIds)
+          ? body.subscriptionIds
+              .filter((id): id is string => typeof id === 'string')
+              .map((id) => id.trim())
+              .filter(Boolean)
+          : []
+      );
+
+      if (!sendToAll && idSet.size === 0) {
+        res.status(400).json({ error: 'Select at least one subscription account or choose sendToAll.' });
+        return;
+      }
+
+      const registry = ensureRegistryFile();
+      const nowIso = new Date().toISOString();
+      let updatedCount = 0;
+
+      for (const sub of registry.subscriptions) {
+        if (sendToAll || idSet.has(sub.id)) {
+          sub.adminMessage = message;
+          sub.adminMessageUpdatedAt = nowIso;
+          updatedCount += 1;
+        }
+      }
+
+      saveRegistry(registry);
+
+      res.json({
+        updatedCount,
+        totalCount: registry.subscriptions.length,
+        adminMessageUpdatedAt: nowIso,
+      });
     }
   );
 

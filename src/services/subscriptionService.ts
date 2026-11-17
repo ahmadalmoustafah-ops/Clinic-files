@@ -42,7 +42,7 @@ export const SubscriptionService = {
   },
 
   async syncAllAccounts(
-    accounts: Array<{ id: string; fullName: string; createdAt: string }>
+    accounts: Array<{ id: string; fullName: string; createdAt: string; filesCount?: number }>
   ): Promise<void> {
     if (!accounts.length) return;
     if (typeof navigator !== 'undefined' && !navigator.onLine) return;
@@ -63,6 +63,7 @@ export const SubscriptionService = {
     id: string;
     fullName: string;
     createdAt: string;
+    filesCount?: number;
   }): Promise<ClientSubscriptionState> {
     const cached = readCache(params.id);
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -70,6 +71,37 @@ export const SubscriptionService = {
     }
 
     try {
+      // Register or update subscription metadata + total filesCount (zero patient content)
+      const regRes = await fetch('/api/subscriptions/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        body: JSON.stringify({
+          id: params.id,
+          fullName: params.fullName,
+          createdAt: params.createdAt,
+          ...(typeof params.filesCount === 'number'
+            ? { filesCount: Math.max(0, Math.floor(params.filesCount)) }
+            : {}),
+        }),
+      });
+
+      if (regRes.ok) {
+        const regData = (await regRes.json()) as {
+          status?: SubscriptionStatus;
+          adminMessage?: string;
+          adminMessageUpdatedAt?: string | null;
+        };
+        const nextState: ClientSubscriptionState = {
+          status: regData.status === 'suspended' ? 'suspended' : 'active',
+          adminMessage: typeof regData.adminMessage === 'string' ? regData.adminMessage : '',
+          adminMessageUpdatedAt: regData.adminMessageUpdatedAt || null,
+        };
+        writeCache(params.id, nextState);
+        return nextState;
+      }
+
+      // Fallback status check if POST was rejected transiently
       const statusRes = await fetch(
         `/api/subscriptions/status/${encodeURIComponent(params.id)}?_t=${Date.now()}`,
         {
@@ -94,33 +126,6 @@ export const SubscriptionService = {
           writeCache(params.id, nextState);
           return nextState;
         }
-      }
-
-      // Register or refresh name on server registry (only id + fullName + createdAt — zero patient data)
-      const regRes = await fetch('/api/subscriptions/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        cache: 'no-store',
-        body: JSON.stringify({
-          id: params.id,
-          fullName: params.fullName,
-          createdAt: params.createdAt,
-        }),
-      });
-
-      if (regRes.ok) {
-        const regData = (await regRes.json()) as {
-          status?: SubscriptionStatus;
-          adminMessage?: string;
-          adminMessageUpdatedAt?: string | null;
-        };
-        const nextState: ClientSubscriptionState = {
-          status: regData.status === 'suspended' ? 'suspended' : 'active',
-          adminMessage: typeof regData.adminMessage === 'string' ? regData.adminMessage : '',
-          adminMessageUpdatedAt: regData.adminMessageUpdatedAt || null,
-        };
-        writeCache(params.id, nextState);
-        return nextState;
       }
     } catch {
       // Offline / transient error: keep cached state gracefully
