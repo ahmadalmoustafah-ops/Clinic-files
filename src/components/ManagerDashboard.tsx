@@ -19,6 +19,8 @@ import {
   Stethoscope,
 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
+import { AuthService } from '../services/authService';
+import { SubscriptionService } from '../services/subscriptionService';
 
 interface ManagedSubscription {
   id: string;
@@ -31,22 +33,91 @@ interface ManagedSubscription {
 }
 
 const MANAGER_TOKEN_KEY = 'easy_clinic_manager_token_v1';
+const MANAGER_SAVED_CRED_KEY = 'easy_clinic_manager_saved_cred_v1';
+const MANAGER_OWNER_EMAIL = 'ahmad.almoustafah@gmail.com';
+
+interface SavedManagerCred {
+  email: string;
+  password: string;
+}
+
+function readStoredManagerToken(): string | null {
+  try {
+    return (
+      localStorage.getItem(MANAGER_TOKEN_KEY) ||
+      sessionStorage.getItem(MANAGER_TOKEN_KEY) ||
+      null
+    );
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredManagerToken(token: string): void {
+  try {
+    localStorage.setItem(MANAGER_TOKEN_KEY, token);
+  } catch {}
+  try {
+    sessionStorage.setItem(MANAGER_TOKEN_KEY, token);
+  } catch {}
+}
+
+function clearStoredManagerToken(): void {
+  try {
+    localStorage.removeItem(MANAGER_TOKEN_KEY);
+  } catch {}
+  try {
+    sessionStorage.removeItem(MANAGER_TOKEN_KEY);
+  } catch {}
+}
+
+function readSavedManagerCred(): SavedManagerCred | null {
+  try {
+    const raw = localStorage.getItem(MANAGER_SAVED_CRED_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<SavedManagerCred>;
+    if (
+      typeof parsed?.email === 'string' &&
+      typeof parsed?.password === 'string' &&
+      parsed.email.trim() &&
+      parsed.password.length >= 6
+    ) {
+      return { email: parsed.email.trim(), password: parsed.password };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSavedManagerCred(email: string, password: string): void {
+  try {
+    localStorage.setItem(
+      MANAGER_SAVED_CRED_KEY,
+      JSON.stringify({ email: email.trim(), password })
+    );
+  } catch {}
+}
+
+function clearSavedManagerCred(): void {
+  try {
+    localStorage.removeItem(MANAGER_SAVED_CRED_KEY);
+  } catch {}
+}
 
 export const ManagerDashboard: React.FC = () => {
   const { isRTL, language, toggleLanguage } = useLanguage();
   const isAr = language === 'ar';
 
-  const [token, setToken] = useState<string | null>(() => {
-    try {
-      return sessionStorage.getItem(MANAGER_TOKEN_KEY);
-    } catch {
-      return null;
-    }
-  });
+  const [token, setToken] = useState<string | null>(readStoredManagerToken);
   const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
-  const [email, setEmail] = useState('ahmad.almoustafah@gmail.com');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState(() => readSavedManagerCred()?.email || MANAGER_OWNER_EMAIL);
+  const [password, setPassword] = useState(() => readSavedManagerCred()?.password || '');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [rememberPassword, setRememberPassword] = useState(true);
+  const [autoLoggingIn, setAutoLoggingIn] = useState<boolean>(
+    () => !readStoredManagerToken() && Boolean(readSavedManagerCred())
+  );
   const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
@@ -54,6 +125,8 @@ export const ManagerDashboard: React.FC = () => {
   const [subscriptions, setSubscriptions] = useState<ManagedSubscription[]>([]);
   const [counts, setCounts] = useState({ total: 0, active: 0, suspended: 0 });
   const [loadingList, setLoadingList] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -68,67 +141,126 @@ export const ManagerDashboard: React.FC = () => {
     setTimeout(() => setToast(null), 3500);
   };
 
-  const checkAuthStatus = useCallback(async () => {
+  const initAuthAndAutoLogin = useCallback(async () => {
+    let configured = true;
     try {
-      const res = await fetch('/api/manager/auth-status', { cache: 'no-store' });
+      const res = await fetch(`/api/manager/auth-status?_t=${Date.now()}`, {
+        cache: 'no-store',
+      });
       if (res.ok) {
         const data = (await res.json()) as { isConfigured?: boolean };
-        setIsConfigured(Boolean(data.isConfigured));
+        configured = Boolean(data.isConfigured);
+        setIsConfigured(configured);
+      } else {
+        setIsConfigured(true);
       }
     } catch {
       setIsConfigured(true);
     }
-  }, []);
 
-  const fetchSubscriptions = useCallback(
-    async (activeToken: string) => {
-      setLoadingList(true);
+    const saved = readSavedManagerCred();
+    if (saved && saved.email.toLowerCase() === MANAGER_OWNER_EMAIL) {
+      setAutoLoggingIn(true);
       try {
-        const res = await fetch('/api/manager/subscriptions', {
-          headers: { Authorization: `Bearer ${activeToken}` },
-          cache: 'no-store',
+        const endpoint = configured ? '/api/manager/login' : '/api/manager/setup';
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: saved.email, password: saved.password }),
         });
-
-        if (res.status === 401) {
-          sessionStorage.removeItem(MANAGER_TOKEN_KEY);
-          setToken(null);
+        const data = (await res.json()) as { token?: string };
+        if (res.ok && data.token) {
+          saveStoredManagerToken(data.token);
+          setToken(data.token);
+          setAuthError(null);
           return;
         }
-
-        if (res.ok) {
-          const data = (await res.json()) as {
-            totalCount: number;
-            activeCount: number;
-            suspendedCount: number;
-            subscriptions: ManagedSubscription[];
-          };
-          setSubscriptions(data.subscriptions || []);
-          setCounts({
-            total: data.totalCount || 0,
-            active: data.activeCount || 0,
-            suspended: data.suspendedCount || 0,
-          });
+        if (res.status === 401 || res.status === 403) {
+          clearSavedManagerCred();
         }
+      } catch {
+        // Network issue; fall back cleanly to login view
       } finally {
-        setLoadingList(false);
+        setAutoLoggingIn(false);
       }
-    },
-    []
-  );
+    } else {
+      setAutoLoggingIn(false);
+    }
+  }, []);
+
+  const fetchSubscriptions = useCallback(async (activeToken: string) => {
+    setLoadingList(true);
+    setFetchError(null);
+    try {
+      // Ensure any locally registered accounts in this browser are synced before listing
+      await SubscriptionService.syncAllAccounts(AuthService.getAllAccountSummaries());
+
+      const res = await fetch(`/api/manager/subscriptions?_t=${Date.now()}`, {
+        headers: { Authorization: `Bearer ${activeToken}` },
+        cache: 'no-store',
+      });
+
+      if (res.status === 401) {
+        clearStoredManagerToken();
+        setToken(null);
+        return;
+      }
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      const data = (await res.json()) as {
+        totalCount: number;
+        activeCount: number;
+        suspendedCount: number;
+        subscriptions: ManagedSubscription[];
+      };
+      setSubscriptions(data.subscriptions || []);
+      setCounts({
+        total: data.totalCount || 0,
+        active: data.activeCount || 0,
+        suspended: data.suspendedCount || 0,
+      });
+      setHasLoadedOnce(true);
+    } catch {
+      setFetchError(
+        isAr
+          ? 'تعذر تحميل قائمة المشتركين من الخادم حالياً. يرجى الضغط على تحديث لإعادة المحاولة.'
+          : 'Failed to load subscriber accounts from server. Tap refresh to retry.'
+      );
+    } finally {
+      setLoadingList(false);
+    }
+  }, [isAr]);
 
   useEffect(() => {
     document.title = 'Easy clinic manager';
+    SubscriptionService.syncAllAccounts(AuthService.getAllAccountSummaries());
   }, []);
 
   useEffect(() => {
     if (!token) {
-      checkAuthStatus();
+      initAuthAndAutoLogin();
     } else {
       fetchSubscriptions(token);
       const timer = window.setInterval(() => fetchSubscriptions(token), 15000);
-      return () => clearInterval(timer);
+      const onFocusOrVisible = () => {
+        if (document.visibilityState === 'visible') {
+          fetchSubscriptions(token);
+        }
+      };
+      window.addEventListener('focus', onFocusOrVisible);
+      window.addEventListener('online', onFocusOrVisible);
+      document.addEventListener('visibilitychange', onFocusOrVisible);
+      return () => {
+        clearInterval(timer);
+        window.removeEventListener('focus', onFocusOrVisible);
+        window.removeEventListener('online', onFocusOrVisible);
+        document.removeEventListener('visibilitychange', onFocusOrVisible);
+      };
     }
-  }, [token, checkAuthStatus, fetchSubscriptions]);
+  }, [token, initAuthAndAutoLogin, fetchSubscriptions]);
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -161,7 +293,12 @@ export const ManagerDashboard: React.FC = () => {
           setAuthError(data.error || (isAr ? 'فشل إعداد كلمة السر' : 'Setup failed'));
           return;
         }
-        sessionStorage.setItem(MANAGER_TOKEN_KEY, data.token);
+        saveStoredManagerToken(data.token);
+        if (rememberPassword) {
+          saveSavedManagerCred(email, password);
+        } else {
+          clearSavedManagerCred();
+        }
         setToken(data.token);
         setPassword('');
         setConfirmPassword('');
@@ -187,7 +324,12 @@ export const ManagerDashboard: React.FC = () => {
         );
         return;
       }
-      sessionStorage.setItem(MANAGER_TOKEN_KEY, data.token);
+      saveStoredManagerToken(data.token);
+      if (rememberPassword) {
+        saveSavedManagerCred(email, password);
+      } else {
+        clearSavedManagerCred();
+      }
       setToken(data.token);
       setPassword('');
     } finally {
@@ -212,7 +354,7 @@ export const ManagerDashboard: React.FC = () => {
       });
 
       if (res.status === 401) {
-        sessionStorage.removeItem(MANAGER_TOKEN_KEY);
+        clearStoredManagerToken();
         setToken(null);
         return;
       }
@@ -245,11 +387,9 @@ export const ManagerDashboard: React.FC = () => {
     if (!token || !messageTarget || sendingMessage) return;
 
     const trimmed = messageText.trim();
-    if (trimmed.length < 50) {
+    if (!trimmed) {
       setMessageError(
-        isAr
-          ? `يجب أن تحتوي الرسالة على 50 حرفاً على الأقل (المتبقي: ${50 - trimmed.length} حرفاً).`
-          : `Message must be at least 50 characters (${50 - trimmed.length} remaining).`
+        isAr ? 'يرجى كتابة نص الرسالة قبل الإرسال.' : 'Please enter a message before sending.'
       );
       return;
     }
@@ -270,7 +410,7 @@ export const ManagerDashboard: React.FC = () => {
       );
 
       if (res.status === 401) {
-        sessionStorage.removeItem(MANAGER_TOKEN_KEY);
+        clearStoredManagerToken();
         setToken(null);
         return;
       }
@@ -315,12 +455,36 @@ export const ManagerDashboard: React.FC = () => {
   };
 
   const handleManagerLogout = () => {
-    sessionStorage.removeItem(MANAGER_TOKEN_KEY);
+    clearStoredManagerToken();
+    clearSavedManagerCred();
     setToken(null);
+    setPassword('');
+    setConfirmPassword('');
     setSubscriptions([]);
+    setHasLoadedOnce(false);
   };
 
   const trimmedLen = messageText.trim().length;
+
+  // --- Seamless Auto-Login Splash while verifying remembered credentials ---
+  if (!token && autoLoggingIn) {
+    return (
+      <div
+        className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4"
+        dir={isRTL ? 'rtl' : 'ltr'}
+      >
+        <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl p-8 text-center shadow-2xl space-y-3">
+          <div className="w-14 h-14 mx-auto rounded-2xl bg-sky-500/20 border border-sky-400/30 flex items-center justify-center">
+            <RefreshCw className="w-6 h-6 text-sky-300 animate-spin" />
+          </div>
+          <h1 className="text-base font-extrabold text-white">Easy clinic manager</h1>
+          <p className="text-xs text-slate-300">
+            {isAr ? 'جاري الدخول التلقائي بكلمة السر المحفوظة...' : 'Signing in automatically with saved credentials...'}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   // --- Manager Login / First-Time Owner Setup View ---
   if (!token) {
@@ -431,6 +595,20 @@ export const ManagerDashboard: React.FC = () => {
                 </div>
               </div>
             )}
+
+            <label className="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer select-none pt-0.5">
+              <input
+                type="checkbox"
+                checked={rememberPassword}
+                onChange={(e) => setRememberPassword(e.target.checked)}
+                className="w-4 h-4 rounded accent-sky-500 cursor-pointer"
+              />
+              <span>
+                {isAr
+                  ? 'حفظ كلمة السر على هذا الجهاز للدخول التلقائي مستقبلاً'
+                  : 'Keep password on this device for automatic sign-in'}
+              </span>
+            </label>
 
             <button
               type="submit"
@@ -576,7 +754,30 @@ export const ManagerDashboard: React.FC = () => {
             </span>
           </div>
 
-          {subscriptions.length === 0 ? (
+          {fetchError && (
+            <div className="mb-3 bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 rounded-2xl p-3 text-xs font-semibold flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+                <span>{fetchError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => fetchSubscriptions(token)}
+                className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-[11px] font-bold shrink-0 cursor-pointer"
+              >
+                {isAr ? 'إعادة المحاولة' : 'Retry'}
+              </button>
+            </div>
+          )}
+
+          {loadingList && !hasLoadedOnce ? (
+            <div className="py-12 text-center text-slate-400 text-xs space-y-2">
+              <RefreshCw className="w-8 h-8 mx-auto text-sky-500 animate-spin" />
+              <p className="font-semibold">
+                {isAr ? 'جاري تحميل جميع حسابات المشتركين...' : 'Loading subscriber accounts...'}
+              </p>
+            </div>
+          ) : subscriptions.length === 0 ? (
             <div className="py-12 text-center text-slate-400 text-xs space-y-2">
               <Users className="w-10 h-10 mx-auto text-slate-300 dark:text-slate-700 stroke-[1.2]" />
               <p className="font-semibold">
@@ -731,14 +932,8 @@ export const ManagerDashboard: React.FC = () => {
                       ? 'نص الرسالة (تظهر في مستطيل أصفر على الرئيسية):'
                       : 'Message text (shown in a yellow box on Home):'}
                   </label>
-                  <span
-                    className={`font-mono font-bold text-[11px] ${
-                      trimmedLen >= 50
-                        ? 'text-emerald-600 dark:text-emerald-400'
-                        : 'text-amber-600 dark:text-amber-400'
-                    }`}
-                  >
-                    {trimmedLen} / 50
+                  <span className="font-mono font-bold text-[11px] text-slate-500 dark:text-slate-400">
+                    {trimmedLen} {isAr ? 'حرف' : 'chars'}
                   </span>
                 </div>
 
@@ -748,16 +943,11 @@ export const ManagerDashboard: React.FC = () => {
                   onChange={(e) => setMessageText(e.target.value)}
                   placeholder={
                     isAr
-                      ? 'اكتب رسالتك للعميل هنا بما لا يقل عن 50 حرفاً...'
-                      : 'Write your message to the client (minimum 50 characters)...'
+                      ? 'اكتب رسالتك للعميل هنا...'
+                      : 'Write your message to the client...'
                   }
                   className="w-full p-3.5 text-xs bg-amber-50/40 dark:bg-slate-800 border border-amber-300 dark:border-slate-700 rounded-2xl focus:outline-none focus:ring-2 focus:ring-amber-400 leading-relaxed"
                 />
-                <p className="text-[11px] text-slate-400 mt-1">
-                  {isAr
-                    ? 'الحد الأدنى المطلوب للإرسال هو 50 حرفاً.'
-                    : 'Minimum 50 characters required to send.'}
-                </p>
               </div>
 
               <div className="flex items-center justify-between gap-2 pt-2">
@@ -785,7 +975,7 @@ export const ManagerDashboard: React.FC = () => {
                   </button>
                   <button
                     type="submit"
-                    disabled={sendingMessage || trimmedLen < 50}
+                    disabled={sendingMessage || trimmedLen === 0}
                     className="inline-flex items-center gap-1.5 px-4 py-2 bg-amber-400 hover:bg-amber-500 disabled:opacity-50 text-amber-950 rounded-xl text-xs font-extrabold cursor-pointer shadow-xs"
                   >
                     <Send className="w-3.5 h-3.5" />

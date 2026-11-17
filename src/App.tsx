@@ -62,6 +62,18 @@ const DEFAULT_SUB_STATE: ClientSubscriptionState = {
   adminMessageUpdatedAt: null,
 };
 
+function triggerJsonDownload(json: string, fileName: string): void {
+  const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 export default function App() {
   const { t, isRTL, language, toggleLanguage } = useLanguage();
   const [isManagerRoute, setIsManagerRoute] = useState<boolean>(checkIsManagerRoute);
@@ -102,6 +114,7 @@ export default function App() {
   // Modals & Menus
   const [isBackupOpen, setIsBackupOpen] = useState(false);
   const [isAnalyticsOpen, setIsAnalyticsOpen] = useState(false);
+  const [isDataProtectionOpen, setIsDataProtectionOpen] = useState(false);
   const [isAboutDesignerOpen, setIsAboutDesignerOpen] = useState(false);
   const [isOptionsMenuOpen, setIsOptionsMenuOpen] = useState(false);
   const optionsMenuRef = useRef<HTMLDivElement>(null);
@@ -184,12 +197,16 @@ export default function App() {
     }
   }, [currentUser?.id, isManagerRoute]);
 
-  // Sync subscription status (active/suspended) and manager yellow message silently in background
+  // Sync all locally registered accounts (id + fullName + createdAt only) and active subscription status
   useEffect(() => {
-    if (isManagerRoute || !currentUser) return;
+    SubscriptionService.syncAllAccounts(AuthService.getAllAccountSummaries());
+    if (isManagerRoute || !currentUser) {
+      return;
+    }
 
     let cancelled = false;
     const doSync = async () => {
+      await SubscriptionService.syncAllAccounts(AuthService.getAllAccountSummaries());
       const next = await SubscriptionService.syncAccount({
         id: currentUser.id,
         fullName: currentUser.fullName,
@@ -227,9 +244,84 @@ export default function App() {
     };
   }, [currentUser?.id, currentUser?.fullName, currentUser?.createdAt, isManagerRoute]);
 
+  // Scheduled once-daily automatic backup at 4:00 PM (16:00 local time)
+  const isRunningAutoBackupRef = useRef(false);
+  useEffect(() => {
+    if (isManagerRoute || !currentUser) return;
+
+    let timerId: number | null = null;
+    let disposed = false;
+
+    const scheduleNext4Pm = () => {
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+        timerId = null;
+      }
+      if (disposed || !StorageService.isAutoBackupEnabled()) return;
+      const delayMs = StorageService.getMsUntilNext4Pm();
+      timerId = window.setTimeout(() => {
+        runDailyAutoBackupIfDue();
+      }, delayMs);
+    };
+
+    const runDailyAutoBackupIfDue = async () => {
+      if (disposed || isRunningAutoBackupRef.current) return;
+      if (!StorageService.isDaily4PmAutoBackupDue()) {
+        scheduleNext4Pm();
+        return;
+      }
+
+      isRunningAutoBackupRef.current = true;
+      try {
+        const backupResult = await StorageService.performAutoBackup();
+        if (!disposed) {
+          triggerJsonDownload(backupResult.json, backupResult.fileName);
+          window.dispatchEvent(new CustomEvent('easy-clinic-autobackup-completed'));
+          showAppToast(t.toastAutoBackupSuccess);
+        }
+      } catch (err) {
+        console.error('Daily 4 PM auto-backup failed:', err);
+      } finally {
+        isRunningAutoBackupRef.current = false;
+        scheduleNext4Pm();
+      }
+    };
+
+    // Initial check + exact 4:00 PM arming
+    runDailyAutoBackupIfDue();
+
+    const intervalId = window.setInterval(() => {
+      runDailyAutoBackupIfDue();
+    }, 30000);
+
+    const onVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        runDailyAutoBackupIfDue();
+      }
+    };
+
+    const onAutoBackupToggleChanged = () => {
+      runDailyAutoBackupIfDue();
+    };
+
+    window.addEventListener('focus', onVisibilityOrFocus);
+    document.addEventListener('visibilitychange', onVisibilityOrFocus);
+    window.addEventListener('easy-clinic-autobackup-changed', onAutoBackupToggleChanged);
+
+    return () => {
+      disposed = true;
+      if (timerId !== null) window.clearTimeout(timerId);
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', onVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', onVisibilityOrFocus);
+      window.removeEventListener('easy-clinic-autobackup-changed', onAutoBackupToggleChanged);
+    };
+  }, [currentUser?.id, isManagerRoute, t.toastAutoBackupSuccess]);
+
   const handleAuthenticated = (session: UserSession) => {
     StorageService.setActiveUser(session.id);
     setSubscriptionState(SubscriptionService.getCachedState(session.id));
+    SubscriptionService.syncAllAccounts(AuthService.getAllAccountSummaries());
     setViewMode('home');
     setActivePatient(null);
     setSelectedDayFilter('today');
@@ -243,6 +335,7 @@ export default function App() {
     setIsOptionsMenuOpen(false);
     setIsBackupOpen(false);
     setIsAnalyticsOpen(false);
+    setIsDataProtectionOpen(false);
     setIsAboutDesignerOpen(false);
     setActivePatient(null);
     setViewMode('home');
@@ -343,18 +436,6 @@ export default function App() {
     setViewMode('patient-form');
   };
 
-  const triggerJsonDownload = (json: string, fileName: string) => {
-    const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
   const handleSavePatient = async (savedPatient: PatientRecord, meta?: PatientSaveMeta) => {
     const isNewCreation =
       meta?.isNewCreation ?? !patients.some((p) => p.id === savedPatient.id);
@@ -369,27 +450,6 @@ export default function App() {
     await StorageService.savePatient(savedPatient);
     await refreshData();
     setActivePatient(savedPatient);
-
-    const autoBackupEnabled = StorageService.isAutoBackupEnabled();
-
-    if (isNewCreation && autoBackupEnabled) {
-      try {
-        const backupResult = await StorageService.performAutoBackup();
-        const delayMs = meta?.source === 'save' ? 450 : 50;
-        setTimeout(() => {
-          triggerJsonDownload(backupResult.json, backupResult.fileName);
-        }, delayMs);
-
-        if (meta?.source === 'back') {
-          showAppToast(`${t.toastAutoSavedOnBack} · ${t.toastAutoBackupSuccess}`);
-        } else {
-          showAppToast(t.toastAutoBackupSuccess);
-        }
-        return;
-      } catch (err) {
-        console.error('Auto-backup failed:', err);
-      }
-    }
 
     if (meta?.source === 'back') {
       showAppToast(t.toastAutoSavedOnBack);
@@ -474,7 +534,7 @@ export default function App() {
       )}
 
       {viewMode === 'home' && (
-        <div className="flex flex-col min-h-full pb-20 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+        <div className="flex flex-col min-h-full pb-6 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
           {/* Main Top Header - Android App Bar with 3-Dots Menu in Top-Left Corner */}
           <header className="sticky top-0 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 px-4 py-3 flex items-center justify-between shadow-xs">
             {/* Clinic Brand & Title */}
@@ -575,6 +635,23 @@ export default function App() {
                       <div>
                         <span className="font-bold block">{t.localDatabaseTitle}</span>
                         <span className="text-[10px] text-teal-600 dark:text-teal-400 block font-semibold">{t.localDbConnectedBadge}</span>
+                      </div>
+                    </button>
+
+                    {/* Option 2.B: Data Protection (حماية المعلومات) */}
+                    <button
+                      onClick={() => {
+                        setIsOptionsMenuOpen(false);
+                        setIsDataProtectionOpen(true);
+                      }}
+                      className="w-full px-4 py-3 text-xs text-slate-800 dark:text-slate-200 hover:bg-sky-50 dark:hover:bg-sky-950/60 hover:text-sky-600 dark:hover:text-sky-400 flex items-center gap-3 transition-colors cursor-pointer text-start border-t border-slate-100 dark:border-slate-800/60"
+                    >
+                      <div className="p-1.5 bg-sky-100 dark:bg-sky-900/60 text-sky-600 dark:text-sky-400 rounded-xl">
+                        <ShieldCheck className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <span className="font-bold block">{t.dataProtectionTitle}</span>
+                        <span className="text-[10px] text-slate-400 block">{t.howToProtectData}</span>
                       </div>
                     </button>
 
@@ -681,10 +758,10 @@ export default function App() {
                         <span className="text-[10px] font-bold text-sky-700 dark:text-sky-400 block">
                           {t.aboutDesignerLabel}
                         </span>
-                        <span className="font-bold block text-slate-900 dark:text-white truncate">
+                        <span className="font-bold block text-slate-900 dark:text-white leading-snug">
                           {t.designerName}
                         </span>
-                        <span className="text-[10px] text-teal-700 dark:text-teal-300 font-semibold block truncate">
+                        <span className="text-[10px] text-teal-700 dark:text-teal-300 font-semibold block leading-snug mt-0.5">
                           {t.designerSpecialty}
                         </span>
                       </div>
@@ -1068,63 +1145,6 @@ export default function App() {
             </div>
           </main>
 
-          {/* Android Sticky Bottom Tab Navigation - 3 Native Tabs */}
-          <nav className="fixed bottom-0 left-0 right-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 max-w-4xl mx-auto w-full no-print">
-            <div className="grid grid-cols-3 items-center h-14">
-              <button
-                onClick={() => setViewMode('home')}
-                className={`flex flex-col items-center justify-center gap-1 text-xs font-bold transition-colors cursor-pointer ${
-                  viewMode === 'home'
-                    ? 'text-sky-600 dark:text-sky-400'
-                    : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
-                }`}
-              >
-                <Stethoscope className="w-5 h-5" />
-                <span>{t.home}</span>
-              </button>
-
-              <button
-                onClick={handleNewPatient}
-                className={`flex flex-col items-center justify-center gap-1 text-xs font-bold transition-colors ${
-                  isAccountSuspended
-                    ? 'text-slate-400 opacity-75 cursor-not-allowed'
-                    : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer'
-                }`}
-              >
-                <div
-                  className={`w-8 h-8 rounded-full text-white flex items-center justify-center -mt-3 shadow-md ${
-                    isAccountSuspended
-                      ? 'bg-rose-500 shadow-rose-500/30'
-                      : 'bg-sky-600 shadow-sky-600/30'
-                  }`}
-                >
-                  {isAccountSuspended ? (
-                    <Lock className="w-4 h-4" />
-                  ) : (
-                    <UserPlus className="w-4 h-4" />
-                  )}
-                </div>
-                <span
-                  className={`text-[11px] font-bold ${
-                    isAccountSuspended
-                      ? 'text-rose-600 dark:text-rose-400'
-                      : 'text-sky-700 dark:text-sky-400'
-                  }`}
-                >
-                  {t.newPatient}
-                </span>
-              </button>
-
-              <button
-                onClick={() => setViewMode('calendar')}
-                className="flex flex-col items-center justify-center gap-1 text-xs font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors cursor-pointer"
-              >
-                <Calendar className="w-5 h-5" />
-                <span>{t.appointments}</span>
-              </button>
-            </div>
-          </nav>
-
           {/* Backup Modal */}
           <BackupModal
             isOpen={isBackupOpen}
@@ -1138,6 +1158,64 @@ export default function App() {
             onClose={() => setIsAnalyticsOpen(false)}
             patients={patients}
           />
+
+          {/* Data Protection Modal (حماية المعلومات) */}
+          {isDataProtectionOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+              <div
+                className="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+                dir={isRTL ? 'rtl' : 'ltr'}
+              >
+                <div className="bg-gradient-to-br from-sky-600 via-sky-700 to-teal-700 text-white p-5 relative">
+                  <button
+                    onClick={() => setIsDataProtectionOpen(false)}
+                    className={`absolute top-4 ${isRTL ? 'left-4' : 'right-4'} p-1.5 text-white/80 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer`}
+                    title={t.close}
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md border border-white/30 flex items-center justify-center shadow-md shrink-0">
+                      <ShieldCheck className="w-6 h-6 text-white" />
+                    </div>
+                    <div>
+                      <h2 className="text-base font-extrabold text-white leading-snug">
+                        {t.dataProtectionTitle}
+                      </h2>
+                      <p className="text-[11px] text-sky-100 mt-0.5">
+                        {t.dataProtectionSubtitle}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-5 space-y-3.5 text-xs leading-relaxed">
+                  <div className="bg-sky-50 dark:bg-sky-950/40 border border-sky-200/80 dark:border-sky-900/60 rounded-2xl p-4 text-sky-950 dark:text-sky-100 space-y-2">
+                    <div className="flex items-center gap-2 font-extrabold text-sky-800 dark:text-sky-300">
+                      <ShieldCheck className="w-4 h-4 text-sky-600 dark:text-sky-400 shrink-0" />
+                      <h3>{t.howToProtectData}</h3>
+                    </div>
+                    <p className="text-sky-900 dark:text-sky-200">{t.protectDataDesc}</p>
+                  </div>
+
+                  <div className="bg-teal-50 dark:bg-teal-950/40 border border-teal-200/80 dark:border-teal-900/60 rounded-2xl p-4 text-teal-950 dark:text-teal-100 flex items-start gap-2.5">
+                    <FileEdit className="w-4 h-4 text-teal-600 dark:text-teal-400 shrink-0 mt-0.5" />
+                    <p className="font-semibold text-teal-900 dark:text-teal-200">
+                      {t.protectDataWordNote}
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => setIsDataProtectionOpen(false)}
+                    className="w-full py-2.5 bg-slate-900 dark:bg-sky-600 hover:bg-slate-800 dark:hover:bg-sky-700 text-white text-xs font-bold rounded-2xl transition-colors cursor-pointer"
+                  >
+                    {t.close}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* About the Designer Modal (لمحة عن المصمم) */}
           {isAboutDesignerOpen && (

@@ -84,6 +84,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({
     const next = !autoBackupInfo.enabled;
     StorageService.setAutoBackupEnabled(next);
     setAutoBackupInfo(StorageService.getAutoBackupInfo());
+    window.dispatchEvent(new CustomEvent('easy-clinic-autobackup-changed'));
   };
 
   const handleDownloadLatestAutoSnapshot = () => {
@@ -124,6 +125,14 @@ export const BackupModal: React.FC<BackupModalProps> = ({
       loadStats();
       setStatus(null);
       setImportPreview(null);
+
+      const onAutoBackupCompleted = () => {
+        loadStats();
+      };
+      window.addEventListener('easy-clinic-autobackup-completed', onAutoBackupCompleted);
+      return () => {
+        window.removeEventListener('easy-clinic-autobackup-completed', onAutoBackupCompleted);
+      };
     }
   }, [isOpen]);
 
@@ -329,14 +338,6 @@ export const BackupModal: React.FC<BackupModalProps> = ({
           </div>
         </div>
 
-        {/* Guidance Alert Banner */}
-        <div className="bg-sky-50 dark:bg-sky-950/40 border border-sky-100 dark:border-sky-900/60 rounded-2xl p-3.5 mb-4 text-xs text-sky-900 dark:text-sky-200 flex items-start gap-2.5 leading-relaxed">
-          <ShieldCheck className="w-5 h-5 text-sky-600 shrink-0 mt-0.5" />
-          <div>
-            <strong>{t.howToProtectData}</strong>
-            <p className="mt-0.5 text-sky-800 dark:text-sky-300">{t.protectDataDesc}</p>
-          </div>
-        </div>
 
         {/* Current Database Stats */}
         <div className="bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-700/60 rounded-2xl p-3.5 mb-4">

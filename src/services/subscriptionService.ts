@@ -41,6 +41,24 @@ export const SubscriptionService = {
     return readCache(userId);
   },
 
+  async syncAllAccounts(
+    accounts: Array<{ id: string; fullName: string; createdAt: string }>
+  ): Promise<void> {
+    if (!accounts.length) return;
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+
+    try {
+      await fetch('/api/subscriptions/register-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        body: JSON.stringify({ accounts }),
+      });
+    } catch {
+      // Offline / transient network error: retry on next focus/online/interval
+    }
+  },
+
   async syncAccount(params: {
     id: string;
     fullName: string;
@@ -52,9 +70,12 @@ export const SubscriptionService = {
     }
 
     try {
-      const statusRes = await fetch(`/api/subscriptions/status/${encodeURIComponent(params.id)}`, {
-        cache: 'no-store',
-      });
+      const statusRes = await fetch(
+        `/api/subscriptions/status/${encodeURIComponent(params.id)}?_t=${Date.now()}`,
+        {
+          cache: 'no-store',
+        }
+      );
 
       if (statusRes.ok) {
         const statusData = (await statusRes.json()) as {
@@ -79,6 +100,7 @@ export const SubscriptionService = {
       const regRes = await fetch('/api/subscriptions/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
         body: JSON.stringify({
           id: params.id,
           fullName: params.fullName,

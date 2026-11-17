@@ -564,7 +564,7 @@ export async function exportPatientToWord(
 
   // Build Word Document
   const doc = new Document({
-    creator: 'Easy clinic - Dr. Ahmad Ali Al-Mustafa',
+    creator: 'Easy clinic - Orient technology company',
     title: `${patient.name || 'Patient'} - ${t.appName}`,
     description: t.appSubtitle,
     sections: [

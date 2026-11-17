@@ -655,6 +655,35 @@ export const StorageService = {
     }
   },
 
+  getLocalDayKey(date: Date = new Date()): string {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  },
+
+  hasAutoBackupRunToday(): boolean {
+    const userId = requireUserId();
+    if (!userId) return false;
+    const lastDay = localStorage.getItem(scopedKey(userId, 'last_auto_backup_day'));
+    return lastDay === this.getLocalDayKey();
+  },
+
+  isDaily4PmAutoBackupDue(now: Date = new Date()): boolean {
+    const userId = requireUserId();
+    if (!userId || !this.isAutoBackupEnabled()) return false;
+    // Trigger once per day at or after 16:00 (4:00 PM)
+    if (now.getHours() < 16) return false;
+    return !this.hasAutoBackupRunToday();
+  },
+
+  getMsUntilNext4Pm(now: Date = new Date()): number {
+    const target = new Date(now);
+    target.setHours(16, 0, 0, 0);
+    if (now.getTime() >= target.getTime()) {
+      // Already past 4:00 PM today; next scheduled check is tomorrow 4:00 PM
+      target.setDate(target.getDate() + 1);
+    }
+    return Math.max(1000, target.getTime() - now.getTime());
+  },
+
   async performAutoBackup(): Promise<{
     json: string;
     fileName: string;
@@ -664,13 +693,14 @@ export const StorageService = {
     const json = await this.exportBackup();
     const now = new Date();
     const timestamp = now.toISOString();
-    const dateStr = timestamp.split('T')[0];
+    const dateStr = this.getLocalDayKey(now);
     const timeStr = `${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}`;
     const fileName = `Easy_clinic_auto_backup_${dateStr}_${timeStr}.json`;
 
     if (userId) {
       try {
         localStorage.setItem(scopedKey(userId, 'last_auto_backup_date'), timestamp);
+        localStorage.setItem(scopedKey(userId, 'last_auto_backup_day'), dateStr);
         const prevCount = parseInt(localStorage.getItem(scopedKey(userId, 'auto_backup_count')) || '0', 10) || 0;
         localStorage.setItem(scopedKey(userId, 'auto_backup_count'), String(prevCount + 1));
         try {

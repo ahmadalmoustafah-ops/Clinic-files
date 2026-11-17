@@ -230,6 +230,14 @@ export const AuthService = {
     return getStoredAccounts().length;
   },
 
+  getAllAccountSummaries(): Array<{ id: string; fullName: string; createdAt: string }> {
+    return getStoredAccounts().map((a) => ({
+      id: a.id,
+      fullName: a.fullName,
+      createdAt: a.createdAt,
+    }));
+  },
+
   getCurrentSession(): UserSession | null {
     try {
       const raw = localStorage.getItem(SESSION_KEY);
