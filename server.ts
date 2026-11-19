@@ -454,6 +454,58 @@ async function startServer() {
     });
   });
 
+  // Restore any missing accounts (e.g. currently offline devices after a server restart) from manager persistent cache
+  app.post('/api/manager/subscriptions/restore', requireManagerAuth, (req: Request, res: Response) => {
+    const body = req.body as {
+      subscriptions?: Array<Partial<SubscriptionEntry>>;
+    };
+    const items = Array.isArray(body.subscriptions) ? body.subscriptions : [];
+    const registry = ensureRegistryFile();
+    const nowIso = new Date().toISOString();
+    let restoredCount = 0;
+
+    for (const item of items) {
+      const id = typeof item?.id === 'string' ? item.id.trim() : '';
+      const fullName = typeof item?.fullName === 'string' ? item.fullName.trim() : '';
+      if (!id || id.length > 128 || !fullName || fullName.length > 150) {
+        continue;
+      }
+
+      if (registry.subscriptions.some((s) => s.id === id)) {
+        continue;
+      }
+
+      const filesCount =
+        typeof item?.filesCount === 'number' && Number.isFinite(item.filesCount) && item.filesCount >= 0
+          ? Math.floor(item.filesCount)
+          : 0;
+
+      registry.subscriptions.push({
+        id,
+        fullName,
+        status: item?.status === 'suspended' ? 'suspended' : 'active',
+        adminMessage: typeof item?.adminMessage === 'string' ? item.adminMessage : '',
+        adminMessageUpdatedAt:
+          typeof item?.adminMessageUpdatedAt === 'string' ? item.adminMessageUpdatedAt : null,
+        filesCount,
+        createdAt:
+          typeof item?.createdAt === 'string' && item.createdAt ? item.createdAt : nowIso,
+        lastSeenAt:
+          typeof item?.lastSeenAt === 'string' && item.lastSeenAt ? item.lastSeenAt : nowIso,
+      });
+      restoredCount += 1;
+    }
+
+    if (restoredCount > 0) {
+      saveRegistry(registry);
+    }
+
+    res.json({
+      restoredCount,
+      totalCount: registry.subscriptions.length,
+    });
+  });
+
   app.patch(
     '/api/manager/subscriptions/:id/status',
     requireManagerAuth,
@@ -586,6 +638,33 @@ async function startServer() {
         updatedCount,
         totalCount: registry.subscriptions.length,
         adminMessageUpdatedAt: nowIso,
+      });
+    }
+  );
+
+  app.delete(
+    '/api/manager/subscriptions/:id',
+    requireManagerAuth,
+    (req: Request, res: Response) => {
+      const id = (req.params.id || '').trim();
+      if (!id) {
+        res.status(400).json({ error: 'Missing account ID' });
+        return;
+      }
+
+      const registry = ensureRegistryFile();
+      const initialLen = registry.subscriptions.length;
+      registry.subscriptions = registry.subscriptions.filter((s) => s.id !== id);
+      if (registry.subscriptions.length === initialLen) {
+        res.status(404).json({ error: 'Subscription account not found' });
+        return;
+      }
+
+      saveRegistry(registry);
+      res.json({
+        id,
+        deleted: true,
+        totalCount: registry.subscriptions.length,
       });
     }
   );

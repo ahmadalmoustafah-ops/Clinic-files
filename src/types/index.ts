@@ -3,20 +3,23 @@ export interface MedicalImage {
   name: string;
   url: string; // Base64 or object URL
   date: string;
-  category?: 'echo' | 'lab' | 'xray' | 'general';
+  category?: 'echo' | 'lab' | 'xray' | 'investigations' | 'general';
   notes?: string;
 }
 
 export interface PatientFollowUp {
   id: string;
   date: string; // Formatted date & time (automatically stamped)
-  clinicalEvolution: string; // التطور السريري
-  newExam: string; // الفحص الجديد
+  symptoms?: string; // الأعراض والشكوى الرئيسية
+  clinicalEvolution: string; // التطور السريري (توافق مع النسخ السابقة)
+  newExam: string; // الفحص السريري الجديد
+  echo?: string; // الإيكو
   labs: string; // المخبريات
-  investigations: string; // الاستقصاءات
+  investigations: string; // الاستقصاءات الأخرى
+  differentialDiagnosis?: string; // التشخيص التفريقي
   waiting: string; // الانتظار
   treatment: string; // العلاج
-  images: MedicalImage[]; // صور مخصصة لهذه المتابعة
+  images: MedicalImage[]; // صور مخصصة لهذه المعاينة/المتابعة
   createdAt: string;
 }
 

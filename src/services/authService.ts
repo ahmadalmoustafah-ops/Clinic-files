@@ -2,6 +2,73 @@ import { IdentifierType, UserAccount, UserSession } from '../types';
 
 const ACCOUNTS_KEY = 'easy_clinic_accounts_v1';
 const SESSION_KEY = 'easy_clinic_active_session_v1';
+const REMEMBERED_CREDS_KEY = 'easy_clinic_remembered_creds_v1';
+
+const AUTH_IDB_NAME = 'EasyClinicAuthVaultDB';
+const AUTH_IDB_STORE = 'auth_kv';
+
+export interface RememberedAccountCredential {
+  accountId: string;
+  fullName: string;
+  identifier: string;
+  displayIdentifier: string;
+  identifierType: IdentifierType;
+  password?: string;
+  lastUsedAt: string;
+}
+
+// In-memory safety mirror so accounts/credentials work even if localStorage hits quota
+let memoryAccountsCache: UserAccount[] | null = null;
+let memoryRememberedCache: RememberedAccountCredential[] | null = null;
+
+function openAuthIDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined' || !window.indexedDB) {
+      reject(new Error('IndexedDB unavailable'));
+      return;
+    }
+    const req = window.indexedDB.open(AUTH_IDB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(AUTH_IDB_STORE)) {
+        db.createObjectStore(AUTH_IDB_STORE, { keyPath: 'key' });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbSet(key: string, value: unknown): Promise<void> {
+  try {
+    const db = await openAuthIDB();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(AUTH_IDB_STORE, 'readwrite');
+      tx.objectStore(AUTH_IDB_STORE).put({ key, value });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    // Non-fatal fallback
+  }
+}
+
+async function idbGet<T>(key: string): Promise<T | null> {
+  try {
+    const db = await openAuthIDB();
+    return await new Promise<T | null>((resolve, reject) => {
+      const tx = db.transaction(AUTH_IDB_STORE, 'readonly');
+      const req = tx.objectStore(AUTH_IDB_STORE).get(key);
+      req.onsuccess = () => {
+        const res = req.result as { value?: T } | undefined;
+        resolve(res && res.value !== undefined ? res.value : null);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return null;
+  }
+}
 
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes)
@@ -150,11 +217,9 @@ export function parseAndValidateIdentifier(rawInput: string): {
   if (!trimmed) return { valid: false };
 
   // Convert Arabic-Indic / Persian numerals to ASCII digits first
-  const asciiDigitsNormalized = trimmed.replace(/[٠-٩]/g, (d) =>
-    String('٠١٢٣٤٥٦٧٨٩'.indexOf(d))
-  ).replace(/[۰-۹]/g, (d) =>
-    String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
-  );
+  const asciiDigitsNormalized = trimmed
+    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+    .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
 
   if (asciiDigitsNormalized.includes('@')) {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -187,16 +252,79 @@ export function parseAndValidateIdentifier(rawInput: string): {
 function getStoredAccounts(): UserAccount[] {
   try {
     const raw = localStorage.getItem(ACCOUNTS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        memoryAccountsCache = parsed;
+        return parsed;
+      }
+    }
   } catch {
-    return [];
+    // Fall back to memory mirror if localStorage is temporarily inaccessible
   }
+  return memoryAccountsCache ? [...memoryAccountsCache] : [];
 }
 
 function saveStoredAccounts(accounts: UserAccount[]): void {
-  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
+  memoryAccountsCache = [...accounts];
+  try {
+    localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
+  } catch (e) {
+    console.warn('localStorage accounts save warning (using IndexedDB mirror):', e);
+  }
+  void idbSet(ACCOUNTS_KEY, accounts);
+}
+
+function getStoredRememberedCreds(): RememberedAccountCredential[] {
+  try {
+    const raw = localStorage.getItem(REMEMBERED_CREDS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        memoryRememberedCache = parsed;
+        return parsed;
+      }
+    }
+  } catch {
+    // Fallback
+  }
+  return memoryRememberedCache ? [...memoryRememberedCache] : [];
+}
+
+function saveStoredRememberedCreds(creds: RememberedAccountCredential[]): void {
+  memoryRememberedCache = [...creds];
+  try {
+    localStorage.setItem(REMEMBERED_CREDS_KEY, JSON.stringify(creds));
+  } catch (e) {
+    console.warn('localStorage remembered credentials save warning:', e);
+  }
+  void idbSet(REMEMBERED_CREDS_KEY, creds);
+}
+
+function upsertRememberedCredential(
+  account: UserAccount,
+  password?: string,
+  rememberPassword = true
+): void {
+  const existing = getStoredRememberedCreds();
+  const idx = existing.findIndex((c) => c.accountId === account.id);
+  const previousPassword = idx >= 0 ? existing[idx].password : undefined;
+  const entry: RememberedAccountCredential = {
+    accountId: account.id,
+    fullName: account.fullName,
+    identifier: account.identifier,
+    displayIdentifier: account.displayIdentifier,
+    identifierType: account.identifierType,
+    password: rememberPassword ? password ?? previousPassword : undefined,
+    lastUsedAt: new Date().toISOString(),
+  };
+
+  if (idx >= 0) {
+    existing[idx] = entry;
+  } else {
+    existing.unshift(entry);
+  }
+  saveStoredRememberedCreds(existing);
 }
 
 function toSession(account: UserAccount): UserSession {
@@ -226,6 +354,61 @@ export interface AuthResult {
 }
 
 export const AuthService = {
+  async hydrateFromPersistentBackup(): Promise<boolean> {
+    let changed = false;
+
+    const idbAccounts = await idbGet<UserAccount[]>(ACCOUNTS_KEY);
+    if (Array.isArray(idbAccounts) && idbAccounts.length > 0) {
+      const localAccounts = getStoredAccounts();
+      const merged = [...localAccounts];
+      for (const acc of idbAccounts) {
+        if (acc?.id && !merged.some((m) => m.id === acc.id)) {
+          merged.push(acc);
+          changed = true;
+        }
+      }
+      if (merged.length > 0 && (changed || localAccounts.length === 0)) {
+        memoryAccountsCache = merged;
+        try {
+          localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(merged));
+        } catch {}
+        changed = true;
+      }
+    } else {
+      // Backfill IndexedDB if localStorage already had accounts from earlier version
+      const localAccounts = getStoredAccounts();
+      if (localAccounts.length > 0) {
+        void idbSet(ACCOUNTS_KEY, localAccounts);
+      }
+    }
+
+    const idbCreds = await idbGet<RememberedAccountCredential[]>(REMEMBERED_CREDS_KEY);
+    if (Array.isArray(idbCreds) && idbCreds.length > 0) {
+      const localCreds = getStoredRememberedCreds();
+      const mergedCreds = [...localCreds];
+      for (const cred of idbCreds) {
+        if (!cred?.accountId) continue;
+        const idx = mergedCreds.findIndex((c) => c.accountId === cred.accountId);
+        if (idx === -1) {
+          mergedCreds.push(cred);
+          changed = true;
+        } else if (!mergedCreds[idx].password && cred.password) {
+          mergedCreds[idx] = { ...mergedCreds[idx], password: cred.password };
+          changed = true;
+        }
+      }
+      if (mergedCreds.length > 0 && (changed || localCreds.length === 0)) {
+        memoryRememberedCache = mergedCreds;
+        try {
+          localStorage.setItem(REMEMBERED_CREDS_KEY, JSON.stringify(mergedCreds));
+        } catch {}
+        changed = true;
+      }
+    }
+
+    return changed;
+  },
+
   getAccountsCount(): number {
     return getStoredAccounts().length;
   },
@@ -236,6 +419,37 @@ export const AuthService = {
       fullName: a.fullName,
       createdAt: a.createdAt,
     }));
+  },
+
+  getRememberedAccounts(): RememberedAccountCredential[] {
+    const accounts = getStoredAccounts();
+    const creds = getStoredRememberedCreds();
+    const credsMap = new Map(creds.map((c) => [c.accountId, c]));
+
+    const combined: RememberedAccountCredential[] = accounts.map((acc) => {
+      const saved = credsMap.get(acc.id);
+      return {
+        accountId: acc.id,
+        fullName: acc.fullName,
+        identifier: acc.identifier,
+        displayIdentifier: acc.displayIdentifier,
+        identifierType: acc.identifierType,
+        password: saved?.password,
+        lastUsedAt: saved?.lastUsedAt || acc.lastLoginAt || acc.createdAt,
+      };
+    });
+
+    return combined.sort(
+      (a, b) => new Date(b.lastUsedAt).getTime() - new Date(a.lastUsedAt).getTime()
+    );
+  },
+
+  forgetSavedPassword(accountId: string): void {
+    const creds = getStoredRememberedCreds();
+    const next = creds.map((c) =>
+      c.accountId === accountId ? { ...c, password: undefined } : c
+    );
+    saveStoredRememberedCreds(next);
   },
 
   getCurrentSession(): UserSession | null {
@@ -261,6 +475,7 @@ export const AuthService = {
     fullName: string;
     identifierInput: string;
     password: string;
+    rememberCredentials?: boolean;
   }): Promise<AuthResult> {
     const cleanName = params.fullName.trim();
     if (cleanName.length < 2) {
@@ -302,8 +517,16 @@ export const AuthService = {
     accounts.push(newUser);
     saveStoredAccounts(accounts);
 
+    upsertRememberedCredential(
+      newUser,
+      params.password,
+      params.rememberCredentials !== false
+    );
+
     const session = toSession(newUser);
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    try {
+      localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    } catch {}
 
     return {
       success: true,
@@ -315,6 +538,7 @@ export const AuthService = {
   async login(params: {
     identifierInput: string;
     password: string;
+    rememberCredentials?: boolean;
   }): Promise<AuthResult> {
     const parsedId = parseAndValidateIdentifier(params.identifierInput);
     if (!parsedId.valid || !parsedId.normalized) {
@@ -338,8 +562,16 @@ export const AuthService = {
     accounts[accountIndex] = account;
     saveStoredAccounts(accounts);
 
+    upsertRememberedCredential(
+      account,
+      params.password,
+      params.rememberCredentials !== false
+    );
+
     const session = toSession(account);
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    try {
+      localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    } catch {}
 
     return {
       success: true,
@@ -349,6 +581,8 @@ export const AuthService = {
   },
 
   logout(): void {
-    localStorage.removeItem(SESSION_KEY);
+    try {
+      localStorage.removeItem(SESSION_KEY);
+    } catch {}
   },
 };

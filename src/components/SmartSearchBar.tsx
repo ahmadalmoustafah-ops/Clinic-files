@@ -138,18 +138,6 @@ export const SmartSearchBar: React.FC<SmartSearchBarProps> = ({
     onOpenPatient(patientId, action);
   };
 
-  // Quick Date presets (Today / Yesterday)
-  const setQuickDate = (daysAgo: number) => {
-    const d = new Date();
-    d.setDate(d.getDate() - daysAgo);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    const formatted = `${y}-${m}-${day}`;
-    setQuery(formatted);
-    setIsOpen(true);
-  };
-
   const handleDatePick = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.value) {
       setQuery(e.target.value);
@@ -221,27 +209,6 @@ export const SmartSearchBar: React.FC<SmartSearchBarProps> = ({
           className="sr-only"
           onChange={handleDatePick}
         />
-      </div>
-
-      {/* Quick Date Shortcuts (Today / Yesterday) */}
-      <div className="flex items-center gap-1.5 mt-1.5 px-1">
-        <span className="text-[10px] text-slate-400 font-medium">
-          {t.dateSearchTag}:
-        </span>
-        <button
-          type="button"
-          onClick={() => setQuickDate(0)}
-          className="text-[10px] px-2 py-0.5 rounded-lg bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 hover:bg-sky-100 transition-colors border border-sky-100 dark:border-sky-900 font-semibold"
-        >
-          {t.quickDateToday}
-        </button>
-        <button
-          type="button"
-          onClick={() => setQuickDate(1)}
-          className="text-[10px] px-2 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 transition-colors border border-slate-200 dark:border-slate-700"
-        >
-          {t.quickDateYesterday}
-        </button>
       </div>
 
       {/* Live Dropdown Suggestions */}
@@ -343,7 +310,8 @@ export const SmartSearchBar: React.FC<SmartSearchBarProps> = ({
                             </span>
                             <p className="line-clamp-1 text-[11px] opacity-90 mt-0.5">
                               {stripHtmlToPlainText(
-                                matchingFollowUps[0].clinicalEvolution ||
+                                matchingFollowUps[0].symptoms ||
+                                  matchingFollowUps[0].clinicalEvolution ||
                                   matchingFollowUps[0].newExam ||
                                   matchingFollowUps[0].treatment ||
                                   ''

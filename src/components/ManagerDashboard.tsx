@@ -22,6 +22,8 @@ import {
   Square,
   FileText,
   ArrowUpDown,
+  Wifi,
+  WifiOff,
 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 import { AuthService } from '../services/authService';
@@ -41,7 +43,80 @@ interface ManagedSubscription {
 
 const MANAGER_TOKEN_KEY = 'easy_clinic_manager_token_v1';
 const MANAGER_SAVED_CRED_KEY = 'easy_clinic_manager_saved_cred_v1';
+const MANAGER_SUBS_CACHE_KEY = 'easy_clinic_manager_subs_cache_v1';
+const MANAGER_DELETED_IDS_KEY = 'easy_clinic_manager_deleted_ids_v1';
 const MANAGER_OWNER_EMAIL = 'ahmad.almoustafah@gmail.com';
+const ONLINE_WINDOW_MS = 3 * 60 * 1000;
+
+function readDeletedIdsMap(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(MANAGER_DELETED_IDS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof k === 'string' && typeof v === 'number' && Number.isFinite(v)) {
+        out[k] = v;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveDeletedIdsMap(map: Record<string, number>): void {
+  try {
+    localStorage.setItem(MANAGER_DELETED_IDS_KEY, JSON.stringify(map));
+  } catch {}
+}
+
+function readCachedSubscriptions(): ManagedSubscription[] {
+  try {
+    const raw = localStorage.getItem(MANAGER_SUBS_CACHE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    const list = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray((parsed as { subscriptions?: unknown })?.subscriptions)
+      ? ((parsed as { subscriptions: unknown[] }).subscriptions)
+      : [];
+    return list.filter(
+      (item): item is ManagedSubscription =>
+        Boolean(item) &&
+        typeof item === 'object' &&
+        typeof (item as ManagedSubscription).id === 'string' &&
+        typeof (item as ManagedSubscription).fullName === 'string'
+    );
+  } catch {
+    return [];
+  }
+}
+
+function saveCachedSubscriptions(list: ManagedSubscription[]): void {
+  try {
+    localStorage.setItem(
+      MANAGER_SUBS_CACHE_KEY,
+      JSON.stringify({
+        subscriptions: list,
+        updatedAt: new Date().toISOString(),
+      })
+    );
+  } catch {}
+}
+
+function computeCounts(list: ManagedSubscription[]) {
+  const active = list.filter((s) => s.status === 'active').length;
+  const suspended = list.filter((s) => s.status === 'suspended').length;
+  const totalFiles = list.reduce((sum, s) => sum + (s.filesCount || 0), 0);
+  return {
+    total: list.length,
+    active,
+    suspended,
+    totalFiles,
+  };
+}
 
 interface SavedManagerCred {
   email: string;
@@ -129,13 +204,16 @@ export const ManagerDashboard: React.FC = () => {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
 
-  const [subscriptions, setSubscriptions] = useState<ManagedSubscription[]>([]);
-  const [counts, setCounts] = useState({ total: 0, active: 0, suspended: 0, totalFiles: 0 });
+  const [subscriptions, setSubscriptions] = useState<ManagedSubscription[]>(() =>
+    readCachedSubscriptions()
+  );
+  const [counts, setCounts] = useState(() => computeCounts(readCachedSubscriptions()));
   const [sortBy, setSortBy] = useState<'recent' | 'engagement'>('recent');
   const [loadingList, setLoadingList] = useState(false);
-  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(() => readCachedSubscriptions().length > 0);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   // Message modal state (single account)
@@ -144,13 +222,18 @@ export const ManagerDashboard: React.FC = () => {
   const [messageError, setMessageError] = useState<string | null>(null);
   const [sendingMessage, setSendingMessage] = useState(false);
 
-  // Bulk / Broadcast message state (all or selected accounts)
+  // Bulk / Broadcast message state (selection mode activated only via long press)
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [bulkScope, setBulkScope] = useState<'all' | 'selected'>('all');
   const [bulkMessageText, setBulkMessageText] = useState('');
   const [bulkMessageError, setBulkMessageError] = useState<string | null>(null);
   const [sendingBulk, setSendingBulk] = useState(false);
+
+  const longPressTimerRef = React.useRef<number | null>(null);
+  const longPressStartPosRef = React.useRef<{ x: number; y: number } | null>(null);
+  const longPressTriggeredIdRef = React.useRef<string | null>(null);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -205,7 +288,8 @@ export const ManagerDashboard: React.FC = () => {
   }, []);
 
   const syncLocalAccountsWithCounts = useCallback(async () => {
-    const summaries = AuthService.getAllAccountSummaries();
+    const deletedMap = readDeletedIdsMap();
+    const summaries = AuthService.getAllAccountSummaries().filter((acc) => !deletedMap[acc.id]);
     if (!summaries.length) return;
     const enriched = await Promise.all(
       summaries.map(async (acc) => ({
@@ -219,6 +303,8 @@ export const ManagerDashboard: React.FC = () => {
   const fetchSubscriptions = useCallback(async (activeToken: string) => {
     setLoadingList(true);
     setFetchError(null);
+    const cached = readCachedSubscriptions();
+    const deletedMap = readDeletedIdsMap();
     try {
       // Ensure any locally registered accounts in this browser sync their latest file counts (zero content)
       await syncLocalAccountsWithCounts();
@@ -238,30 +324,86 @@ export const ManagerDashboard: React.FC = () => {
         throw new Error(`HTTP ${res.status}`);
       }
 
-      const data = (await res.json()) as {
+      let data = (await res.json()) as {
         totalCount: number;
         activeCount: number;
         suspendedCount: number;
         totalFilesCount?: number;
         subscriptions: ManagedSubscription[];
       };
-      const list = data.subscriptions || [];
-      setSubscriptions(list);
-      setSelectedIds((prev) => prev.filter((id) => list.some((s) => s.id === id)));
-      const computedFiles = list.reduce((sum, s) => sum + (s.filesCount || 0), 0);
-      setCounts({
-        total: data.totalCount || 0,
-        active: data.activeCount || 0,
-        suspended: data.suspendedCount || 0,
-        totalFiles: typeof data.totalFilesCount === 'number' ? data.totalFilesCount : computedFiles,
-      });
+      let serverList = data.subscriptions || [];
+
+      // If an account seen on server had active sign-in strictly AFTER deletion, un-block it
+      let deletedMapChanged = false;
+      for (const s of serverList) {
+        const delAt = deletedMap[s.id];
+        if (delAt && s.lastSeenAt && new Date(s.lastSeenAt).getTime() > delAt + 5000) {
+          delete deletedMap[s.id];
+          deletedMapChanged = true;
+        }
+      }
+      if (deletedMapChanged) {
+        saveDeletedIdsMap(deletedMap);
+      }
+
+      // Restore any cached offline accounts missing from server (excluding deliberately deleted ones)
+      const missingOnServer = cached.filter(
+        (c) => !deletedMap[c.id] && !serverList.some((s) => s.id === c.id)
+      );
+      if (missingOnServer.length > 0) {
+        try {
+          const restoreRes = await fetch('/api/manager/subscriptions/restore', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${activeToken}`,
+            },
+            body: JSON.stringify({ subscriptions: missingOnServer }),
+          });
+          if (restoreRes.ok) {
+            const refreshedRes = await fetch(`/api/manager/subscriptions?_t=${Date.now()}`, {
+              headers: { Authorization: `Bearer ${activeToken}` },
+              cache: 'no-store',
+            });
+            if (refreshedRes.ok) {
+              data = (await refreshedRes.json()) as typeof data;
+              serverList = data.subscriptions || [];
+            } else {
+              serverList = [...serverList, ...missingOnServer];
+            }
+          } else {
+            serverList = [...serverList, ...missingOnServer];
+          }
+        } catch {
+          serverList = [...serverList, ...missingOnServer];
+        }
+      }
+
+      const sortedList = [...serverList].sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+      saveCachedSubscriptions(sortedList);
+      setSubscriptions(sortedList);
+      setSelectedIds((prev) => prev.filter((id) => sortedList.some((s) => s.id === id)));
+      setCounts(computeCounts(sortedList));
       setHasLoadedOnce(true);
     } catch {
-      setFetchError(
-        isAr
-          ? 'تعذر تحميل قائمة المشتركين من الخادم حالياً. يرجى الضغط على تحديث لإعادة المحاولة.'
-          : 'Failed to load subscriber accounts from server. Tap refresh to retry.'
-      );
+      if (cached.length > 0) {
+        setSubscriptions(cached);
+        setCounts(computeCounts(cached));
+        setHasLoadedOnce(true);
+        setFetchError(
+          isAr
+            ? 'تعذر الاتصال بالخادم حالياً — يتم الإبقاء على عرض جميع حسابات الاشتراك المحفوظة.'
+            : 'Unable to reach server right now — keeping all cached subscription accounts listed.'
+        );
+      } else {
+        setFetchError(
+          isAr
+            ? 'تعذر تحميل قائمة المشتركين من الخادم حالياً. يرجى الضغط على تحديث لإعادة المحاولة.'
+            : 'Failed to load subscriber accounts from server. Tap refresh to retry.'
+        );
+      }
     } finally {
       setLoadingList(false);
     }
@@ -276,6 +418,12 @@ export const ManagerDashboard: React.FC = () => {
     if (!token) {
       initAuthAndAutoLogin();
     } else {
+      const cached = readCachedSubscriptions();
+      if (cached.length > 0) {
+        setSubscriptions((prev) => (prev.length > 0 ? prev : cached));
+        setCounts((prev) => (prev.total > 0 ? prev : computeCounts(cached)));
+        setHasLoadedOnce(true);
+      }
       fetchSubscriptions(token);
       const timer = window.setInterval(() => fetchSubscriptions(token), 15000);
       const onFocusOrVisible = () => {
@@ -497,6 +645,94 @@ export const ManagerDashboard: React.FC = () => {
     setHasLoadedOnce(false);
   };
 
+  const handleDeleteAccount = async (sub: ManagedSubscription) => {
+    if (!token || deletingId) return;
+    const confirmed = window.confirm(
+      isAr
+        ? `هل أنت متأكد من حذف حساب (${sub.fullName}) من القائمة المحفوظة؟`
+        : `Delete account (${sub.fullName}) from the saved subscriptions list?`
+    );
+    if (!confirmed) return;
+
+    setDeletingId(sub.id);
+    try {
+      const res = await fetch(`/api/manager/subscriptions/${encodeURIComponent(sub.id)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (res.status === 401) {
+        clearStoredManagerToken();
+        setToken(null);
+        return;
+      }
+
+      if (!res.ok && res.status !== 404) {
+        showToast(isAr ? 'تعذر حذف الحساب حالياً، حاول مرة أخرى.' : 'Failed to delete account.');
+        return;
+      }
+
+      const deletedMap = readDeletedIdsMap();
+      deletedMap[sub.id] = Date.now();
+      saveDeletedIdsMap(deletedMap);
+
+      setSubscriptions((prev) => {
+        const next = prev.filter((item) => item.id !== sub.id);
+        saveCachedSubscriptions(next);
+        setCounts(computeCounts(next));
+        return next;
+      });
+      setSelectedIds((prev) => prev.filter((item) => item !== sub.id));
+      showToast(
+        isAr ? `تم حذف حساب (${sub.fullName}) من القائمة المحفوظة` : `Deleted (${sub.fullName})`
+      );
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const clearRowLongPress = () => {
+    if (longPressTimerRef.current) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    longPressStartPosRef.current = null;
+  };
+
+  const startRowLongPress = (id: string, e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    clearRowLongPress();
+    longPressStartPosRef.current = { x: e.clientX, y: e.clientY };
+    longPressTimerRef.current = window.setTimeout(() => {
+      longPressTriggeredIdRef.current = id;
+      setIsSelectionMode(true);
+      setSelectedIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+      longPressTimerRef.current = null;
+    }, 550);
+  };
+
+  const handleRowPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!longPressStartPosRef.current || !longPressTimerRef.current) return;
+    const dx = Math.abs(e.clientX - longPressStartPosRef.current.x);
+    const dy = Math.abs(e.clientY - longPressStartPosRef.current.y);
+    if (dx > 12 || dy > 12) {
+      clearRowLongPress();
+    }
+  };
+
+  const formatLastSeen = (iso?: string): string => {
+    if (!iso) return isAr ? 'غير مسجل' : 'Not recorded';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return isAr ? 'غير مسجل' : 'Not recorded';
+    return d.toLocaleString(isAr ? 'ar-EG' : 'en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
   const toggleSelectAccount = (id: string) => {
     setSelectedIds((prev) =>
       prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
@@ -509,6 +745,11 @@ export const ManagerDashboard: React.FC = () => {
     } else {
       setSelectedIds(subscriptions.map((s) => s.id));
     }
+  };
+
+  const exitSelectionMode = () => {
+    setIsSelectionMode(false);
+    setSelectedIds([]);
   };
 
   const openBulkMessageModal = (preferredScope?: 'all' | 'selected') => {
@@ -901,26 +1142,39 @@ export const ManagerDashboard: React.FC = () => {
                   </span>
                 </button>
 
-                <button
-                  type="button"
-                  onClick={toggleSelectAllAccounts}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-[11px] font-bold cursor-pointer transition-colors"
-                >
-                  {selectedIds.length === subscriptions.length && subscriptions.length > 0 ? (
-                    <CheckSquare className="w-3.5 h-3.5 text-sky-600" />
-                  ) : (
-                    <Square className="w-3.5 h-3.5 text-slate-400" />
-                  )}
-                  <span>
-                    {selectedIds.length === subscriptions.length && subscriptions.length > 0
-                      ? isAr
-                        ? 'إلغاء تحديد الكل'
-                        : 'Clear Selection'
-                      : isAr
-                      ? 'تحديد الكل'
-                      : 'Select All'}
-                  </span>
-                </button>
+                {isSelectionMode && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={toggleSelectAllAccounts}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-[11px] font-bold cursor-pointer transition-colors"
+                    >
+                      {selectedIds.length === subscriptions.length && subscriptions.length > 0 ? (
+                        <CheckSquare className="w-3.5 h-3.5 text-sky-600" />
+                      ) : (
+                        <Square className="w-3.5 h-3.5 text-slate-400" />
+                      )}
+                      <span>
+                        {selectedIds.length === subscriptions.length && subscriptions.length > 0
+                          ? isAr
+                            ? 'إلغاء تحديد الكل'
+                            : 'Clear All'
+                          : isAr
+                          ? 'تحديد الكل'
+                          : 'Select All'}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={exitSelectionMode}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-100 rounded-xl text-[11px] font-bold cursor-pointer transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      <span>{isAr ? 'إنهاء التحديد' : 'Done'}</span>
+                    </button>
+                  </>
+                )}
 
                 <button
                   type="button"
@@ -983,6 +1237,9 @@ export const ManagerDashboard: React.FC = () => {
                 const isActive = sub.status === 'active';
                 const isSelected = selectedIds.includes(sub.id);
                 const filesCount = sub.filesCount || 0;
+                const lastSeenMs = sub.lastSeenAt ? new Date(sub.lastSeenAt).getTime() : 0;
+                const isOnlineRecently =
+                  Number.isFinite(lastSeenMs) && lastSeenMs > 0 && Date.now() - lastSeenMs <= ONLINE_WINDOW_MS;
                 const engagementLabel =
                   filesCount === 0
                     ? isAr
@@ -1011,24 +1268,50 @@ export const ManagerDashboard: React.FC = () => {
                 return (
                   <div
                     key={sub.id}
-                    className={`py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-2 rounded-2xl transition-colors ${
+                    onPointerDown={(e) => startRowLongPress(sub.id, e)}
+                    onPointerMove={handleRowPointerMove}
+                    onPointerUp={clearRowLongPress}
+                    onPointerCancel={clearRowLongPress}
+                    onContextMenu={(e) => {
+                      if (isSelectionMode || longPressTriggeredIdRef.current) {
+                        e.preventDefault();
+                      }
+                    }}
+                    onClick={() => {
+                      if (longPressTriggeredIdRef.current === sub.id) {
+                        longPressTriggeredIdRef.current = null;
+                        return;
+                      }
+                      if (isSelectionMode) {
+                        toggleSelectAccount(sub.id);
+                      }
+                    }}
+                    className={`py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-2 rounded-2xl transition-colors select-none ${
+                      isSelectionMode ? 'cursor-pointer' : ''
+                    } ${
                       isSelected ? 'bg-amber-50/50 dark:bg-amber-950/20' : ''
                     }`}
                   >
                     <div className="space-y-1.5 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <button
-                          type="button"
-                          onClick={() => toggleSelectAccount(sub.id)}
-                          className="text-slate-400 hover:text-amber-600 dark:hover:text-amber-400 cursor-pointer shrink-0 p-0.5"
-                          title={isAr ? 'تحديد لإرسال رسالة جماعية' : 'Select for bulk message'}
-                        >
-                          {isSelected ? (
-                            <CheckSquare className="w-4 h-4 text-amber-500" />
-                          ) : (
-                            <Square className="w-4 h-4" />
-                          )}
-                        </button>
+                        {isSelectionMode && (
+                          <button
+                            type="button"
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleSelectAccount(sub.id);
+                            }}
+                            className="text-slate-400 hover:text-amber-600 dark:hover:text-amber-400 cursor-pointer shrink-0 p-0.5"
+                            title={isAr ? 'تحديد لإرسال رسالة جماعية' : 'Select for bulk message'}
+                          >
+                            {isSelected ? (
+                              <CheckSquare className="w-4 h-4 text-amber-500" />
+                            ) : (
+                              <Square className="w-4 h-4" />
+                            )}
+                          </button>
+                        )}
                         <span className="w-6 h-6 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs font-bold font-mono flex items-center justify-center shrink-0">
                           {index + 1}
                         </span>
@@ -1049,6 +1332,29 @@ export const ManagerDashboard: React.FC = () => {
                             : isAr
                             ? 'تعطيل مؤقت (بدون ملفات جديدة)'
                             : 'Suspended (No New Files)'}
+                        </span>
+
+                        <span
+                          className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
+                            isOnlineRecently
+                              ? 'bg-teal-50 text-teal-700 border-teal-200 dark:bg-teal-950/50 dark:text-teal-300 dark:border-teal-800'
+                              : 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700'
+                          }`}
+                        >
+                          {isOnlineRecently ? (
+                            <Wifi className="w-2.5 h-2.5 shrink-0" />
+                          ) : (
+                            <WifiOff className="w-2.5 h-2.5 shrink-0" />
+                          )}
+                          <span>
+                            {isOnlineRecently
+                              ? isAr
+                                ? 'متصل الآن'
+                                : 'Online'
+                              : isAr
+                              ? 'غير متصل حالياً'
+                              : 'Offline'}
+                          </span>
                         </span>
                       </div>
 
@@ -1073,6 +1379,11 @@ export const ManagerDashboard: React.FC = () => {
                             {new Date(sub.createdAt).toLocaleDateString(isAr ? 'ar-EG' : 'en-US')}
                           </span>
                         </span>
+
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                          {isAr ? 'آخر اتصال بالإنترنت:' : 'Last online:'}{' '}
+                          <span className="font-mono">{formatLastSeen(sub.lastSeenAt)}</span>
+                        </span>
                       </div>
 
                       {sub.adminMessage && (
@@ -1083,8 +1394,12 @@ export const ManagerDashboard: React.FC = () => {
                       )}
                     </div>
 
-                    {/* Two Required Action Icons Next to Each Account */}
-                    <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                    {/* Action Icons Next to Each Account */}
+                    <div
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => e.stopPropagation()}
+                      className="flex items-center gap-2 shrink-0 self-end sm:self-center flex-wrap"
+                    >
                       {/* Icon 1: Green/Red Subscription Status Toggle */}
                       <button
                         type="button"
@@ -1131,6 +1446,17 @@ export const ManagerDashboard: React.FC = () => {
                       >
                         <MessageSquareText className="w-4 h-4" />
                         <span>{isAr ? 'رسالة للعميل' : 'Message Client'}</span>
+                      </button>
+
+                      {/* Icon 3: Delete Account from Saved List */}
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteAccount(sub)}
+                        disabled={deletingId === sub.id}
+                        className="p-2 bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 dark:hover:bg-rose-900/70 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800 rounded-2xl transition-colors cursor-pointer disabled:opacity-50"
+                        title={isAr ? 'حذف الحساب من القائمة المحفوظة' : 'Delete account from list'}
+                      >
+                        <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
                   </div>

@@ -90,7 +90,7 @@ export const translations = {
 
     // Recent Patients List / Full Day Patients
     recentPatientsTitle: 'أحدث ملفات المرضى في العيادة',
-    fullDayPatientsTitle: 'مرضى اليوم الكامل',
+    fullDayPatientsTitle: 'مرضى هذا اليوم',
     fullDayPatientsSubtitle: 'كشوفات ومتابعات يوم',
     filterToday: 'اليوم',
     filterYesterday: 'أمس',
@@ -119,7 +119,7 @@ export const translations = {
     basicDataAndExam: 'البيانات الأساسية والفحص',
     patientFollowUps: 'متابعات المريض',
     imagesAndScans: 'الصور والأشعة',
-    newFollowUpBtn: 'متابعة جديدة (+)',
+    newFollowUpBtn: 'معاينة جديدة (+)',
     recordedBadge: 'مسجل',
 
     // Patient Form Demographics
@@ -173,14 +173,20 @@ export const translations = {
 
     // Follow-ups section
     followUpHistoryTitle: 'سجل متابعات ومعاينات المريض',
-    followUpUnlimitedDesc: 'يتيح النظام استيعاب عدد غير محدود من المتابعات السريرية لكل زيارة مع التاريخ التلقائي',
-    noFollowUpsYet: 'لا توجد متابعات مسجلة لهذا المريض حتى الآن',
-    clickPlusToAddFollowUp: 'اضغط على زر (+) في الأعلى لإنشاء زيارة متابعة جديدة مع إدراج التاريخ تلقائياً',
-    addFirstFollowUpNow: 'إضافة أول متابعة الآن',
-    followUpItemTitle: 'متابعة المريض',
+    followUpUnlimitedDesc: 'يتيح النظام استيعاب عدد غير محدود من المعاينات والمتابعات السريرية لكل مريض مع التاريخ التلقائي',
+    noFollowUpsYet: 'لا توجد معاينات أو متابعات مسجلة لهذا المريض حتى الآن',
+    clickPlusToAddFollowUp: 'اضغط على زر (+ معاينة جديدة) في الأعلى لإنشاء معاينة جديدة مع إدراج التاريخ تلقائياً',
+    addFirstFollowUpNow: 'إضافة أول معاينة الآن',
+    followUpItemTitle: 'معاينة المريض',
     autoDatePrefix: 'التاريخ التلقائي:',
     attachImagesToFollowUp: 'إرفاق صور',
-    deleteFollowUpConfirm: 'هل أنت متأكد من رغبتك في حذف هذه المتابعة؟',
+    deleteFollowUpConfirm: 'هل أنت متأكد من رغبتك في حذف هذه المعاينة؟',
+    allergyAlertBadge: 'تحسس مسجل!',
+    attachFieldPhotoBtn: 'إضافة / إرفاق صورة',
+    fieldAttachedPhotosLabel: 'الصور المرفقة:',
+    categoryEchoBadge: 'إيكو',
+    categoryLabBadge: 'مخبريات',
+    categoryInvestigationsBadge: 'استقصاءات',
 
     // Follow-up 6 Fields
     clinicalEvolution: 'التطور السريري',
@@ -191,7 +197,7 @@ export const translations = {
     investigationsFollowUp: 'الاستقصاءات',
     waitingFollowUp: 'الانتظار',
     treatmentFollowUp: 'العلاج',
-    attachedImagesToVisit: 'الصور والفحوصات المرفقة بهذه المتابعة:',
+    attachedImagesToVisit: 'الصور والفحوصات المرفقة بهذه المعاينة:',
 
     // Images tab
     galleryTitle: 'معرض الصور والأشعة والتقارير الطبية',
@@ -304,7 +310,7 @@ export const translations = {
     toastDeletedPatient: 'تم حذف ملف المريض',
     toastImageAdded: 'تمت إضافة الصورة إلى الملف الطبي بنجاح',
     toastImageDeleted: 'تم حذف الصورة',
-    toastFollowUpAdded: 'تم إنشاء متابعة سريرية جديدة بالتاريخ التلقائي',
+    toastFollowUpAdded: 'تم إنشاء معاينة جديدة بالتاريخ التلقائي',
     toastFollowUpDeleted: 'تم حذف المتابعة',
     toastBackupExportSuccess: 'تم تنزيل النسخة الاحتياطية بنجاح!',
     // Statistics & PWA & Offline
@@ -361,11 +367,18 @@ export const translations = {
     authErrAccountExists: 'يوجد حساب مسجل مسبقاً بهذا البريد الإلكتروني أو رقم الهاتف.',
     authErrInvalidCredentials: 'بيانات الدخول غير صحيحة. تأكد من البريد/الهاتف وكلمة السر.',
     authPrivateVaultLabel: 'حساب معزول ومؤمن',
-    logoutTitle: 'تسجيل الخروج / تبديل الحساب',
+    authRememberMeLabel: 'حفظ الحساب وكلمة السر على هذا الجهاز لتسجيل الدخول لاحقاً',
+    authSavedAccountsTitle: 'الحسابات المحفوظة على هذا الجهاز',
+    authSavedPasswordBadge: 'كلمة السر محفوظة',
+    authQuickSignInBtn: 'دخول',
+    authUseAnotherAccount: 'استخدام حساب آخر',
+    authForgetPasswordTitle: 'مسح كلمة السر المحفوظة',
+    authGenericLoginError: 'حدث خطأ غير متوقع أثناء تسجيل الدخول. يرجى المحاولة مرة أخرى.',
+    logoutTitle: 'تسجيل الخروج',
     logoutDesc: 'قفل الحساب الحالي وحماية ملفات المرضى',
 
     // About Designer
-    aboutDesignerLabel: 'لمحة عن المصمم',
+    aboutDesignerLabel: 'تواصل مع المصمم',
     designerName: 'Orient technology company',
     designerSpecialty: 'يمكنكم التواصل عبر واتساب 0934069455',
     designerBioTitle: 'الشركة المصممة والمطورة',
@@ -377,6 +390,21 @@ export const translations = {
     accountSuspendedTitle: 'الحساب في وضع التعطيل المؤقت',
     accountSuspendedBannerDesc: 'تم تقييد إنشاء ملفات مرضى جديدة مؤقتاً من قِبل الإدارة. يمكنك فتح وتعديل ملفاتك القديمة وإضافة المتابعات لها بشكل طبيعي.',
     accountSuspendedBlockedNewToast: 'التعطيل المؤقت مفعل: لا يمكن إنشاء ملف مريض جديد حالياً، يمكنك فقط تعديل ومتابعة الملفات القديمة.',
+
+    // Clinical Field Settings (الإعدادات - السحابات الرئيسية والفرعية)
+    settingsMenuTitle: 'الإعدادات',
+    settingsMenuDesc: 'تفعيل أو تعطيل السحابات الرئيسية والفرعية في الملفات',
+    settingsModalTitle: 'إعدادات حقول وسحابات الملف',
+    settingsModalSubtitle: 'فعّل أو عطّل أي سحابة أو حقل تعريفي حسب اختصاصك وطبيعة عملك',
+    settingsDataSafeNote: 'تعطيل أي حقل أو سحابة يخفيها من العرض داخل الملفات فقط ولا يحذف أي بيانات مسجلة مسبقاً.',
+    settingsMainBadge: 'سحابة رئيسية',
+    settingsSubBadge: 'سحابة فرعية',
+    settingsRequiredAlwaysBadge: 'أساسي وإجباري دائماً',
+    settingsMainDisabledHint: 'السحابة الرئيسية معطلة حالياً — فعّلها أو فعّل أحد حقولها لإظهارها',
+    settingsFollowUpSection: 'سحابات متابعات المريض',
+    settingsResetAll: 'تفعيل الكل (الافتراضي)',
+    settingsSavedToast: 'تم تحديث إعدادات السحابات والحقول بنجاح',
+    settingsAllHiddenHint: 'جميع السحابات مخفية من الإعدادات — يمكنك إعادة تفعيلها من قائمة الثلاث نقاط > الإعدادات.',
 
     // Arabic Months and Days
     months: [
@@ -477,11 +505,11 @@ export const translations = {
 
     // Recent Patients List / Full Day Patients
     recentPatientsTitle: 'Recent Clinic Patient Records',
-    fullDayPatientsTitle: 'Full Day Patients',
+    fullDayPatientsTitle: 'Patients on This Day',
     fullDayPatientsSubtitle: 'Consultations & follow-ups for',
     filterToday: 'Today',
     filterYesterday: 'Yesterday',
-    filterSelectDay: 'Pick Date',
+    filterSelectDay: 'Select Date',
     filterAllPatients: 'All Patients',
     noPatientsOnDay: 'No consultations or follow-ups recorded on this day',
     switchDayToView: 'You can choose another day or create a new consultation now',
@@ -506,7 +534,7 @@ export const translations = {
     basicDataAndExam: 'Demographics & Exam',
     patientFollowUps: 'Follow-ups',
     imagesAndScans: 'Photos & Scans',
-    newFollowUpBtn: 'New Follow-up (+)',
+    newFollowUpBtn: 'New Consultation (+)',
     recordedBadge: 'Recorded',
 
     // Patient Form Demographics
@@ -559,15 +587,21 @@ export const translations = {
     treatmentPlaceholder: '1. Medication name, dosage, schedule, instructions\n2. Dietary & lifestyle recommendations\n3. Follow-up review date...',
 
     // Follow-ups section
-    followUpHistoryTitle: 'Patient Clinical Follow-up Log',
-    followUpUnlimitedDesc: 'System supports unlimited clinical follow-ups per patient with automatic timestamping',
-    noFollowUpsYet: 'No follow-up visits recorded for this patient yet',
-    clickPlusToAddFollowUp: 'Click (+) above to generate a new clinical visit with auto-timestamp',
-    addFirstFollowUpNow: 'Add First Follow-up Now',
-    followUpItemTitle: 'Patient Follow-up',
+    followUpHistoryTitle: 'Patient Clinical Follow-up & Consultation Log',
+    followUpUnlimitedDesc: 'System supports unlimited clinical consultations and follow-ups per patient with automatic timestamping',
+    noFollowUpsYet: 'No follow-ups or consultations recorded for this patient yet',
+    clickPlusToAddFollowUp: 'Click (+ New Consultation) above to generate a new clinical consultation with auto-timestamp',
+    addFirstFollowUpNow: 'Add First Consultation Now',
+    followUpItemTitle: 'Patient Consultation',
     autoDatePrefix: 'Auto Timestamp:',
     attachImagesToFollowUp: 'Attach Photos',
-    deleteFollowUpConfirm: 'Are you sure you want to delete this follow-up?',
+    deleteFollowUpConfirm: 'Are you sure you want to delete this consultation?',
+    allergyAlertBadge: 'Allergy Alert!',
+    attachFieldPhotoBtn: 'Add / Attach Photo',
+    fieldAttachedPhotosLabel: 'Attached Photos:',
+    categoryEchoBadge: 'Echo',
+    categoryLabBadge: 'Labs',
+    categoryInvestigationsBadge: 'Investigations',
 
     // Follow-up 6 Fields
     clinicalEvolution: 'Clinical Evolution',
@@ -578,7 +612,7 @@ export const translations = {
     investigationsFollowUp: 'Investigations',
     waitingFollowUp: 'Observation / Waiting',
     treatmentFollowUp: 'Treatment & Regimen',
-    attachedImagesToVisit: 'Photos & scans attached to this visit:',
+    attachedImagesToVisit: 'Photos & scans attached to this consultation:',
 
     // Images tab
     galleryTitle: 'Medical Scans, Echo & Lab Gallery',
@@ -691,7 +725,7 @@ export const translations = {
     toastDeletedPatient: 'Patient file deleted',
     toastImageAdded: 'Medical scan added successfully',
     toastImageDeleted: 'Photo deleted',
-    toastFollowUpAdded: 'New clinical follow-up created with auto timestamp',
+    toastFollowUpAdded: 'New consultation added with auto timestamp',
     toastFollowUpDeleted: 'Follow-up deleted',
     toastBackupExportSuccess: 'Complete backup downloaded successfully!',
     // Statistics & PWA & Offline
@@ -748,11 +782,18 @@ export const translations = {
     authErrAccountExists: 'An account with this email or phone number already exists.',
     authErrInvalidCredentials: 'Invalid email/phone or password.',
     authPrivateVaultLabel: 'Private Isolated Vault',
-    logoutTitle: 'Sign Out / Switch Account',
+    authRememberMeLabel: 'Remember account & password on this device for future sign-in',
+    authSavedAccountsTitle: 'Saved Accounts on This Device',
+    authSavedPasswordBadge: 'Password saved',
+    authQuickSignInBtn: 'Sign In',
+    authUseAnotherAccount: 'Use another account',
+    authForgetPasswordTitle: 'Clear saved password',
+    authGenericLoginError: 'An unexpected error occurred during sign in. Please try again.',
+    logoutTitle: 'Sign Out',
     logoutDesc: 'Lock this account and protect patient records',
 
     // About Designer
-    aboutDesignerLabel: 'About the Designer',
+    aboutDesignerLabel: 'Contact Designer',
     designerName: 'Orient technology company',
     designerSpecialty: 'Contact via WhatsApp: 0934069455',
     designerBioTitle: 'Designed & Developed By',
@@ -764,6 +805,21 @@ export const translations = {
     accountSuspendedTitle: 'Account Temporarily Suspended',
     accountSuspendedBannerDesc: 'Creating new patient files is temporarily disabled by management. You can still open, edit, and add follow-ups to existing stored files.',
     accountSuspendedBlockedNewToast: 'Account suspended: creating new patient files is currently disabled. You may edit and add follow-ups to existing files.',
+
+    // Clinical Field Settings
+    settingsMenuTitle: 'Settings',
+    settingsMenuDesc: 'Enable or disable main & sub sections inside files',
+    settingsModalTitle: 'File Sections & Fields Settings',
+    settingsModalSubtitle: 'Enable or disable any demographic field or clinical section according to your specialty workflow',
+    settingsDataSafeNote: 'Disabling any field or section only hides it from view inside files and never deletes previously saved patient data.',
+    settingsMainBadge: 'Main Section',
+    settingsSubBadge: 'Sub Section',
+    settingsRequiredAlwaysBadge: 'Required Always On',
+    settingsMainDisabledHint: 'Main section is currently disabled — toggle it or any sub-field on to show',
+    settingsFollowUpSection: 'Patient Follow-Up Sub Sections',
+    settingsResetAll: 'Enable All (Default)',
+    settingsSavedToast: 'File sections settings updated',
+    settingsAllHiddenHint: 'All clinical sections are hidden via Settings — you can re-enable them from Options > Settings.',
 
     // English Months and Days
     months: [

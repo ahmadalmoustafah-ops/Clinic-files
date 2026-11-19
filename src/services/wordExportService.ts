@@ -581,12 +581,14 @@ export async function exportPatientToWord(
       docChildren.push(
         makeKeyValueTable(
           [
-            { label: t.clinicalEvolution, value: fu.clinicalEvolution },
-            { label: t.newExam, value: fu.newExam },
-            { label: t.labsFollowUp, value: fu.labs },
-            { label: t.investigationsFollowUp, value: fu.investigations },
-            { label: t.waitingFollowUp, value: fu.waiting },
-            { label: t.treatmentFollowUp, value: fu.treatment },
+            { label: t.symptoms, value: fu.symptoms ?? fu.clinicalEvolution },
+            { label: t.clinicalExam, value: fu.newExam },
+            { label: t.echo, value: fu.echo || '' },
+            { label: t.labs, value: fu.labs },
+            { label: t.otherInvestigations, value: fu.investigations },
+            { label: t.differentialDiagnosis, value: fu.differentialDiagnosis || '', boldPurple: true },
+            { label: t.waiting, value: fu.waiting },
+            { label: t.treatment, value: fu.treatment },
           ],
           isRTL,
           emptyFallback,

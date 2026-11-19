@@ -235,21 +235,21 @@ export const RichClinicalField: React.FC<RichClinicalFieldProps> = ({
         </div>
       )}
 
-      {/* Selection Color Toolbar (Appears when 1+ words are selected while editing) */}
+      {/* Selection Color Toolbar (Floating pinned at top so Android native selection bar / keyboard never overlaps it) */}
       {isEditing && hasSelection && (
         <div
           onMouseDown={(e) => e.preventDefault()}
-          className="flex items-center justify-between gap-2 px-3 py-1.5 bg-slate-900 dark:bg-slate-800 text-white rounded-xl shadow-md border border-slate-700 text-xs animate-in fade-in zoom-in-95 duration-100"
+          className="fixed top-14 sm:top-16 left-1/2 -translate-x-1/2 z-50 w-max max-w-[94vw] flex items-center justify-between gap-2 px-3.5 py-2 bg-slate-900/95 dark:bg-slate-800/95 backdrop-blur-md text-white rounded-2xl shadow-2xl border border-slate-700 text-xs animate-in fade-in slide-in-from-top-2 duration-150"
         >
-          <span className="text-[11px] font-bold text-slate-300">
-            {isAr ? 'تلوين الكلمات المحددة:' : 'Highlight selected words:'}
+          <span className="text-[11px] font-bold text-slate-300 hidden sm:inline">
+            {isAr ? 'تلوين الكلمات:' : 'Color:'}
           </span>
           <div className="flex items-center gap-1.5">
             <button
               type="button"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => applySelectionColor('#0284c7')}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-[11px] font-bold cursor-pointer active:scale-95"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-[11px] font-bold cursor-pointer active:scale-95 shadow-xs"
             >
               <span className="w-2.5 h-2.5 rounded-full bg-white ring-2 ring-sky-300" />
               <span>{isAr ? 'أزرق' : 'Blue'}</span>
@@ -259,7 +259,7 @@ export const RichClinicalField: React.FC<RichClinicalFieldProps> = ({
               type="button"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => applySelectionColor('#dc2626')}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-[11px] font-bold cursor-pointer active:scale-95"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-[11px] font-bold cursor-pointer active:scale-95 shadow-xs"
             >
               <span className="w-2.5 h-2.5 rounded-full bg-white ring-2 ring-rose-300" />
               <span>{isAr ? 'أحمر' : 'Red'}</span>
@@ -269,7 +269,7 @@ export const RichClinicalField: React.FC<RichClinicalFieldProps> = ({
               type="button"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => applySelectionColor('reset')}
-              className="px-2 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-[11px] font-semibold cursor-pointer"
+              className="px-2.5 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl text-[11px] font-semibold cursor-pointer"
               title={isAr ? 'إزالة التلوين' : 'Reset color'}
             >
               {isAr ? 'عادي' : 'Reset'}

@@ -24,6 +24,7 @@ import {
   MessageSquareText,
   PauseCircle,
   Lock,
+  Settings,
 } from 'lucide-react';
 import { PatientRecord, Appointment, ViewMode, UserSession } from './types';
 import { StorageService } from './services/storageService';
@@ -32,12 +33,18 @@ import {
   SubscriptionService,
   ClientSubscriptionState,
 } from './services/subscriptionService';
+import {
+  ClinicalFieldSettings,
+  FieldSettingsService,
+  FIELD_SETTINGS_EVENT,
+} from './services/fieldSettingsService';
 import { SmartSearchBar } from './components/SmartSearchBar';
 import { PatientForm, PatientSaveMeta } from './components/PatientForm';
 import { AppointmentsCalendar } from './components/AppointmentsCalendar';
 import { AndroidFrame } from './components/AndroidFrame';
 import { BackupModal } from './components/BackupModal';
 import { AnalyticsModal } from './components/AnalyticsModal';
+import { FieldSettingsModal } from './components/FieldSettingsModal';
 import { OfflineIndicator, OfflineBadge } from './components/OfflineIndicator';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { AuthScreen } from './components/AuthScreen';
@@ -101,6 +108,18 @@ export default function App() {
     return existing;
   });
 
+  useEffect(() => {
+    AuthService.hydrateFromPersistentBackup().then(() => {
+      if (!currentUser) {
+        const session = AuthService.getCurrentSession();
+        if (session) {
+          StorageService.setActiveUser(session.id);
+          setCurrentUser(session);
+        }
+      }
+    });
+  }, []);
+
   const [patients, setPatients] = useState<PatientRecord[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -115,8 +134,12 @@ export default function App() {
   const [isBackupOpen, setIsBackupOpen] = useState(false);
   const [isAnalyticsOpen, setIsAnalyticsOpen] = useState(false);
   const [isDataProtectionOpen, setIsDataProtectionOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAboutDesignerOpen, setIsAboutDesignerOpen] = useState(false);
   const [isOptionsMenuOpen, setIsOptionsMenuOpen] = useState(false);
+  const [fieldSettings, setFieldSettings] = useState<ClinicalFieldSettings>(() =>
+    FieldSettingsService.getSettings(currentUser?.id)
+  );
   const optionsMenuRef = useRef<HTMLDivElement>(null);
 
   // Initialize history listener and sequential Back layers for all views & modals
@@ -158,13 +181,18 @@ export default function App() {
     () => setIsDataProtectionOpen(false)
   );
   useBackHandler(
+    'settings-modal',
+    !isManagerRoute && Boolean(currentUser) && isSettingsOpen,
+    () => setIsSettingsOpen(false)
+  );
+  useBackHandler(
     'about-designer-modal',
     !isManagerRoute && Boolean(currentUser) && isAboutDesignerOpen,
     () => setIsAboutDesignerOpen(false)
   );
 
   // Full Day Patient Filter
-  const [selectedDayFilter, setSelectedDayFilter] = useState<'today' | 'yesterday' | 'custom' | 'all'>('today');
+  const [selectedDayFilter, setSelectedDayFilter] = useState<'today' | 'custom' | 'all'>('today');
   const [customDayDate, setCustomDayDate] = useState<string>('');
   const [appToast, setAppToast] = useState<{ msg: string; type: 'success' | 'warning' } | null>(null);
   const [subscriptionState, setSubscriptionState] = useState<ClientSubscriptionState>(() => {
@@ -214,15 +242,30 @@ export default function App() {
     if (currentUser) {
       StorageService.setActiveUser(currentUser.id);
       setSubscriptionState(SubscriptionService.getCachedState(currentUser.id));
+      setFieldSettings(FieldSettingsService.getSettings(currentUser.id));
       refreshData();
     } else {
       StorageService.setActiveUser(null);
       setSubscriptionState(DEFAULT_SUB_STATE);
+      setFieldSettings(FieldSettingsService.getSettings(null));
       setPatients([]);
       setAppointments([]);
       setLoading(false);
     }
   }, [currentUser?.id, isManagerRoute]);
+
+  useEffect(() => {
+    const onSettingsChanged = (e: Event) => {
+      const detail = (e as CustomEvent<ClinicalFieldSettings>).detail;
+      if (detail) {
+        setFieldSettings(detail);
+      } else if (currentUser) {
+        setFieldSettings(FieldSettingsService.getSettings(currentUser.id));
+      }
+    };
+    window.addEventListener(FIELD_SETTINGS_EVENT, onSettingsChanged);
+    return () => window.removeEventListener(FIELD_SETTINGS_EVENT, onSettingsChanged);
+  }, [currentUser?.id]);
 
   const patientsCountRef = useRef<number>(0);
   patientsCountRef.current = patients.length;
@@ -400,6 +443,7 @@ export default function App() {
     setIsBackupOpen(false);
     setIsAnalyticsOpen(false);
     setIsDataProtectionOpen(false);
+    setIsSettingsOpen(false);
     setIsAboutDesignerOpen(false);
     setActivePatient(null);
     setViewMode('home');
@@ -415,15 +459,9 @@ export default function App() {
   const tomorrowStr = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`;
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
-
   const activeDate = selectedDayFilter === 'today'
     ? todayStr
-    : selectedDayFilter === 'yesterday'
-      ? yesterdayStr
-      : customDayDate || todayStr;
+    : customDayDate || todayStr;
 
   // Compute Full Day Patients list
   const dayPatients = useMemo(() => {
@@ -484,7 +522,7 @@ export default function App() {
     if (found) {
       setReturnViewAfterForm(viewMode === 'calendar' ? 'calendar' : 'home');
       setActivePatient(found);
-      setAutoAddFollowUp(action === 'add-followup');
+      setAutoAddFollowUp(action === 'add-followup' || action === 'new-consultation');
       setViewMode('patient-form');
     }
   };
@@ -593,6 +631,7 @@ export default function App() {
             setReturnViewAfterForm('home');
           }}
           autoAddFollowUp={autoAddFollowUp}
+          fieldSettings={fieldSettings}
         />
       )}
 
@@ -680,16 +719,13 @@ export default function App() {
                       }}
                       className="w-full px-4 py-3 text-xs text-slate-800 dark:text-slate-200 hover:bg-sky-50 dark:hover:bg-sky-950/60 hover:text-sky-600 dark:hover:text-sky-400 flex items-center gap-3 transition-colors cursor-pointer text-start"
                     >
-                      <div className="p-1.5 bg-sky-100 dark:bg-sky-900/60 text-sky-600 dark:text-sky-400 rounded-xl">
+                      <div className="p-1.5 bg-sky-100 dark:bg-sky-900/60 text-sky-600 dark:text-sky-400 rounded-xl shrink-0">
                         <BarChart3 className="w-4 h-4" />
                       </div>
-                      <div>
-                        <span className="font-bold block">{t.analyticsIcon}</span>
-                        <span className="text-[10px] text-slate-400 block">{t.liveAnalysis}</span>
-                      </div>
+                      <span className="font-bold">{t.analyticsIcon}</span>
                     </button>
 
-                    {/* Option 2: Local Storage Database & Backup (قاعدة البيانات المحلية) */}
+                    {/* Option 2: Backup (النسخ الاحتياطي) */}
                     <button
                       onClick={() => {
                         setIsOptionsMenuOpen(false);
@@ -697,13 +733,10 @@ export default function App() {
                       }}
                       className="w-full px-4 py-3 text-xs text-slate-800 dark:text-slate-200 hover:bg-teal-50 dark:hover:bg-teal-950/60 hover:text-teal-600 dark:hover:text-teal-400 flex items-center gap-3 transition-colors cursor-pointer text-start border-t border-slate-100 dark:border-slate-800/60"
                     >
-                      <div className="p-1.5 bg-teal-100 dark:bg-teal-900/60 text-teal-600 dark:text-teal-400 rounded-xl">
+                      <div className="p-1.5 bg-teal-100 dark:bg-teal-900/60 text-teal-600 dark:text-teal-400 rounded-xl shrink-0">
                         <Database className="w-4 h-4" />
                       </div>
-                      <div>
-                        <span className="font-bold block">{t.localDatabaseTitle}</span>
-                        <span className="text-[10px] text-teal-600 dark:text-teal-400 block font-semibold">{t.localDbConnectedBadge}</span>
-                      </div>
+                      <span className="font-bold">{t.backupTab}</span>
                     </button>
 
                     {/* Option 2.B: Data Protection (حماية المعلومات) */}
@@ -714,13 +747,24 @@ export default function App() {
                       }}
                       className="w-full px-4 py-3 text-xs text-slate-800 dark:text-slate-200 hover:bg-sky-50 dark:hover:bg-sky-950/60 hover:text-sky-600 dark:hover:text-sky-400 flex items-center gap-3 transition-colors cursor-pointer text-start border-t border-slate-100 dark:border-slate-800/60"
                     >
-                      <div className="p-1.5 bg-sky-100 dark:bg-sky-900/60 text-sky-600 dark:text-sky-400 rounded-xl">
+                      <div className="p-1.5 bg-sky-100 dark:bg-sky-900/60 text-sky-600 dark:text-sky-400 rounded-xl shrink-0">
                         <ShieldCheck className="w-4 h-4" />
                       </div>
-                      <div>
-                        <span className="font-bold block">{t.dataProtectionTitle}</span>
-                        <span className="text-[10px] text-slate-400 block">{t.howToProtectData}</span>
+                      <span className="font-bold">{t.dataProtectionTitle}</span>
+                    </button>
+
+                    {/* Option 2.C: Field & Accordion Settings (الإعدادات) */}
+                    <button
+                      onClick={() => {
+                        setIsOptionsMenuOpen(false);
+                        setIsSettingsOpen(true);
+                      }}
+                      className="w-full px-4 py-3 text-xs text-slate-800 dark:text-slate-200 hover:bg-sky-50 dark:hover:bg-sky-950/60 hover:text-sky-600 dark:hover:text-sky-400 flex items-center gap-3 transition-colors cursor-pointer text-start border-t border-slate-100 dark:border-slate-800/60"
+                    >
+                      <div className="p-1.5 bg-sky-100 dark:bg-sky-900/60 text-sky-600 dark:text-sky-400 rounded-xl shrink-0">
+                        <Settings className="w-4 h-4" />
                       </div>
+                      <span className="font-bold">{t.settingsMenuTitle}</span>
                     </button>
 
                     {/* Option 3: Language Toggle (العربية / English) */}
@@ -731,13 +775,10 @@ export default function App() {
                       }}
                       className="w-full px-4 py-3 text-xs text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-3 transition-colors cursor-pointer text-start border-t border-slate-100 dark:border-slate-800/60"
                     >
-                      <div className="p-1.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl">
+                      <div className="p-1.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl shrink-0">
                         <Languages className="w-4 h-4 text-sky-600" />
                       </div>
-                      <div>
-                        <span className="font-bold block">{t.toggleLanguage}</span>
-                        <span className="text-[10px] text-slate-400 block">Switch / تبديل اللغة</span>
-                      </div>
+                      <span className="font-bold">{t.toggleLanguage}</span>
                     </button>
 
                     {/* Option 4: PWA Install Button */}
@@ -745,44 +786,29 @@ export default function App() {
                       <PWAInstallButton />
                     </div>
 
-                    {/* Option 6: Sign Out / Switch Account */}
+                    {/* Option 6: Sign Out (تسجيل الخروج) */}
                     <button
                       onClick={handleLogout}
-                      className="w-full px-4 py-3 text-xs text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 flex items-center gap-3 transition-colors cursor-pointer text-start border-t border-slate-100 dark:border-slate-800/60"
+                      className="w-full px-4 py-3 text-xs text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-3 transition-colors cursor-pointer text-start border-t border-slate-100 dark:border-slate-800/60"
                     >
-                      <div className="p-1.5 bg-rose-100 dark:bg-rose-900/50 text-rose-600 dark:text-rose-400 rounded-xl shrink-0">
+                      <div className="p-1.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl shrink-0">
                         <LogOut className="w-4 h-4" />
                       </div>
-                      <div className="min-w-0">
-                        <span className="font-bold block truncate">{t.logoutTitle}</span>
-                        <span className="text-[10px] text-rose-500/80 dark:text-rose-400/80 block truncate">
-                          {t.logoutDesc}
-                        </span>
-                      </div>
+                      <span className="font-bold truncate">{t.logoutTitle}</span>
                     </button>
 
-                    {/* Option 7 (End of menu): About the Designer (لمحة عن المصمم) */}
+                    {/* Option 7 (End of menu): Contact Designer (تواصل مع المصمم) */}
                     <button
                       onClick={() => {
                         setIsOptionsMenuOpen(false);
                         setIsAboutDesignerOpen(true);
                       }}
-                      className="w-full px-4 py-3 text-xs bg-gradient-to-r from-sky-50/80 to-teal-50/80 dark:from-sky-950/40 dark:to-teal-950/40 hover:from-sky-100 hover:to-teal-100 dark:hover:from-sky-900/50 dark:hover:to-teal-900/50 text-slate-800 dark:text-slate-200 flex items-center gap-3 transition-colors cursor-pointer text-start border-t border-slate-200/80 dark:border-slate-800 mt-1"
+                      className="w-full px-4 py-3 text-xs text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-3 transition-colors cursor-pointer text-start border-t border-slate-100 dark:border-slate-800/60"
                     >
-                      <div className="p-1.5 bg-gradient-to-br from-sky-600 to-teal-600 text-white rounded-xl shadow-xs shrink-0">
+                      <div className="p-1.5 bg-sky-100 dark:bg-sky-900/60 text-sky-600 dark:text-sky-400 rounded-xl shrink-0">
                         <Award className="w-4 h-4" />
                       </div>
-                      <div className="min-w-0">
-                        <span className="text-[10px] font-bold text-sky-700 dark:text-sky-400 block">
-                          {t.aboutDesignerLabel}
-                        </span>
-                        <span className="font-bold block text-slate-900 dark:text-white leading-snug">
-                          {t.designerName}
-                        </span>
-                        <span className="text-[10px] text-teal-700 dark:text-teal-300 font-semibold block leading-snug mt-0.5">
-                          {t.designerSpecialty}
-                        </span>
-                      </div>
+                      <span className="font-bold truncate">{t.aboutDesignerLabel}</span>
                     </button>
                   </div>
                 </>
@@ -933,9 +959,6 @@ export default function App() {
                 </div>
                 <div className="mt-2">
                   <h2 className="text-sm font-bold">{t.newPatient}</h2>
-                  <p className="text-[11px] text-sky-100 mt-0.5 line-clamp-1">
-                    {t.newPatientDesc}
-                  </p>
                 </div>
               </button>
 
@@ -958,9 +981,6 @@ export default function App() {
                       </span>
                     )}
                   </div>
-                  <p className="text-[11px] text-teal-100 mt-0.5 line-clamp-1">
-                    {t.appointmentsDesc}
-                  </p>
                 </div>
               </button>
             </div>
@@ -1012,69 +1032,35 @@ export default function App() {
               </div>
             </div>
 
-            {/* 5. FULL DAY PATIENTS SECTION (مرضى اليوم الكامل) */}
+            {/* 5. PATIENTS OF THIS DAY SECTION (مرضى هذا اليوم + التاريخ) */}
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-4 shadow-xs">
-              {/* Section Header & Day Filters */}
+              {/* Section Header & Date Picker Only */}
               <div className="flex flex-col gap-2.5 pb-3 mb-3 border-b border-slate-100 dark:border-slate-800">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2">
                     <div className="p-1.5 bg-sky-100 dark:bg-sky-950 text-sky-600 rounded-xl">
                       <Users className="w-4 h-4" />
                     </div>
-                    <div>
-                      <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
-                        {t.fullDayPatientsTitle}
-                      </h3>
-                      <p className="text-[11px] text-slate-400">
-                        {selectedDayFilter === 'all'
-                          ? t.registeredFiles
-                          : `${t.fullDayPatientsSubtitle} (${activeDate})`}
-                      </p>
-                    </div>
+                    <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
+                      {selectedDayFilter === 'all'
+                        ? t.filterAllPatients
+                        : `${t.fullDayPatientsTitle} (${activeDate})`}
+                    </h3>
                   </div>
 
-                  <span className="text-xs font-bold text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/60 px-2.5 py-1 rounded-xl border border-sky-200 dark:border-sky-800">
-                    {dayPatients.length} {t.patientsOnSelectedDay}
-                  </span>
-                </div>
-
-                {/* Day Filter Pills */}
-                <div className="flex items-center gap-1.5 flex-wrap pt-1">
-                  <button
-                    onClick={() => setSelectedDayFilter('today')}
-                    className={`px-3 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                      selectedDayFilter === 'today'
-                        ? 'bg-sky-600 text-white shadow-xs'
-                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-                    }`}
-                  >
-                    {t.filterToday} ({todayStr})
-                  </button>
-
-                  <button
-                    onClick={() => setSelectedDayFilter('yesterday')}
-                    className={`px-3 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                      selectedDayFilter === 'yesterday'
-                        ? 'bg-sky-600 text-white shadow-xs'
-                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-                    }`}
-                  >
-                    {t.filterYesterday}
-                  </button>
-
                   <label
-                    className={`inline-flex items-center gap-1 px-3 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
                       selectedDayFilter === 'custom'
                         ? 'bg-sky-600 text-white border-sky-600 shadow-xs'
-                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-200'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-slate-200'
                     }`}
                   >
                     <CalendarDays className="w-3.5 h-3.5" />
-                    <span>{selectedDayFilter === 'custom' ? customDayDate : t.filterSelectDay}</span>
+                    <span>{t.filterSelectDay}</span>
                     <input
                       type="date"
                       className="sr-only"
-                      value={customDayDate}
+                      value={customDayDate || activeDate}
                       onChange={(e) => {
                         if (e.target.value) {
                           setCustomDayDate(e.target.value);
@@ -1083,17 +1069,6 @@ export default function App() {
                       }}
                     />
                   </label>
-
-                  <button
-                    onClick={() => setSelectedDayFilter('all')}
-                    className={`px-2.5 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-                      selectedDayFilter === 'all'
-                        ? 'bg-sky-600 text-white shadow-xs'
-                        : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:bg-slate-200'
-                    }`}
-                  >
-                    {t.filterAllPatients}
-                  </button>
                 </div>
               </div>
 
@@ -1108,14 +1083,6 @@ export default function App() {
                     {t.switchDayToView}
                   </p>
                   <div className="mt-3 flex items-center justify-center gap-2 flex-wrap">
-                    {selectedDayFilter !== 'yesterday' && (
-                      <button
-                        onClick={() => setSelectedDayFilter('yesterday')}
-                        className="px-3 py-1.5 bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold rounded-xl hover:bg-slate-300 transition"
-                      >
-                        {t.filterYesterday} ({yesterdayStr})
-                      </button>
-                    )}
                     <button
                       onClick={handleNewPatient}
                       className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-sky-600 text-white text-xs font-bold rounded-xl hover:bg-sky-700 transition"
@@ -1206,6 +1173,16 @@ export default function App() {
             isOpen={isAnalyticsOpen}
             onClose={() => setIsAnalyticsOpen(false)}
             patients={patients}
+          />
+
+          {/* File Sections Settings Modal (الإعدادات) */}
+          <FieldSettingsModal
+            isOpen={isSettingsOpen}
+            onClose={() => setIsSettingsOpen(false)}
+            settings={fieldSettings}
+            onSettingsChange={(next) => {
+              setFieldSettings(next);
+            }}
           />
 
           {/* Data Protection Modal (حماية المعلومات) */}

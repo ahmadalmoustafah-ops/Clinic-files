@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Stethoscope,
   Mail,
@@ -12,9 +12,15 @@ import {
   Languages,
   User,
   AlertCircle,
+  KeyRound,
+  Trash2,
 } from 'lucide-react';
 import { UserSession } from '../types';
-import { AuthService, AuthErrorCode } from '../services/authService';
+import {
+  AuthService,
+  AuthErrorCode,
+  RememberedAccountCredential,
+} from '../services/authService';
 import { StorageService } from '../services/storageService';
 import { useLanguage } from '../context/LanguageContext';
 import { OfflineBadge } from './OfflineIndicator';
@@ -25,18 +31,50 @@ interface AuthScreenProps {
 
 export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
   const { t, isRTL, toggleLanguage } = useLanguage();
-  const hasExistingAccounts = AuthService.getAccountsCount() > 0;
+  const [rememberedAccounts, setRememberedAccounts] = useState<RememberedAccountCredential[]>(() =>
+    AuthService.getRememberedAccounts()
+  );
+
+  const initialLatest = rememberedAccounts[0];
+  const hasExistingAccounts = rememberedAccounts.length > 0;
 
   const [mode, setMode] = useState<'login' | 'register'>(
     hasExistingAccounts ? 'login' : 'register'
   );
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(
+    initialLatest ? initialLatest.accountId : null
+  );
   const [fullName, setFullName] = useState('');
-  const [identifierInput, setIdentifierInput] = useState('');
-  const [password, setPassword] = useState('');
+  const [identifierInput, setIdentifierInput] = useState(
+    initialLatest ? initialLatest.displayIdentifier : ''
+  );
+  const [password, setPassword] = useState(initialLatest?.password || '');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [rememberCredentials, setRememberCredentials] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Hydrate accounts & remembered credentials from IndexedDB backup if localStorage missed them
+  useEffect(() => {
+    let cancelled = false;
+    AuthService.hydrateFromPersistentBackup().then((restored) => {
+      if (cancelled) return;
+      const list = AuthService.getRememberedAccounts();
+      setRememberedAccounts(list);
+      if (restored && list.length > 0) {
+        setMode('login');
+        if (!identifierInput) {
+          setSelectedAccountId(list[0].accountId);
+          setIdentifierInput(list[0].displayIdentifier);
+          setPassword(list[0].password || '');
+        }
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const mapErrorCode = (code?: AuthErrorCode): string => {
     switch (code) {
@@ -52,6 +90,59 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
       default:
         return t.authErrInvalidCredentials;
     }
+  };
+
+  const handleSelectRememberedAccount = (acc: RememberedAccountCredential) => {
+    setErrorMsg(null);
+    setSelectedAccountId(acc.accountId);
+    setIdentifierInput(acc.displayIdentifier);
+    setPassword(acc.password || '');
+    setMode('login');
+  };
+
+  const handleQuickLoginAccount = async (acc: RememberedAccountCredential) => {
+    if (isSubmitting) return;
+    handleSelectRememberedAccount(acc);
+    if (!acc.password) return;
+
+    setIsSubmitting(true);
+    setErrorMsg(null);
+    try {
+      const res = await AuthService.login({
+        identifierInput: acc.displayIdentifier,
+        password: acc.password,
+        rememberCredentials: true,
+      });
+
+      if (!res.success || !res.session) {
+        setErrorMsg(mapErrorCode(res.errorCode));
+        return;
+      }
+
+      StorageService.setActiveUser(res.session.id);
+      onAuthenticated(res.session);
+    } catch {
+      setErrorMsg(t.authGenericLoginError);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleForgetPassword = (e: React.MouseEvent, accountId: string) => {
+    e.stopPropagation();
+    AuthService.forgetSavedPassword(accountId);
+    const updated = AuthService.getRememberedAccounts();
+    setRememberedAccounts(updated);
+    if (selectedAccountId === accountId) {
+      setPassword('');
+    }
+  };
+
+  const handleUseAnotherAccount = () => {
+    setSelectedAccountId(null);
+    setIdentifierInput('');
+    setPassword('');
+    setErrorMsg(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -71,6 +162,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
           fullName,
           identifierInput,
           password,
+          rememberCredentials,
         });
 
         if (!res.success || !res.session) {
@@ -85,6 +177,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
 
         StorageService.setActiveUser(res.session.id);
         onAuthenticated(res.session);
+      } catch {
+        setErrorMsg(t.authGenericLoginError);
       } finally {
         setIsSubmitting(false);
       }
@@ -97,6 +191,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
       const res = await AuthService.login({
         identifierInput,
         password,
+        rememberCredentials,
       });
 
       if (!res.success || !res.session) {
@@ -106,6 +201,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
 
       StorageService.setActiveUser(res.session.id);
       onAuthenticated(res.session);
+    } catch {
+      setErrorMsg(t.authGenericLoginError);
     } finally {
       setIsSubmitting(false);
     }
@@ -114,8 +211,17 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
   const switchMode = (nextMode: 'login' | 'register') => {
     setMode(nextMode);
     setErrorMsg(null);
-    setPassword('');
-    setConfirmPassword('');
+    if (nextMode === 'register') {
+      setSelectedAccountId(null);
+      setIdentifierInput('');
+      setPassword('');
+      setConfirmPassword('');
+    } else if (rememberedAccounts.length > 0) {
+      const target = rememberedAccounts[0];
+      setSelectedAccountId(target.accountId);
+      setIdentifierInput(target.displayIdentifier);
+      setPassword(target.password || '');
+    }
   };
 
   const looksLikeEmail = identifierInput.includes('@');
@@ -199,6 +305,86 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
             </div>
           )}
 
+          {/* Remembered Accounts List (on Login tab) */}
+          {mode === 'login' && rememberedAccounts.length > 0 && (
+            <div className="space-y-2 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 rounded-2xl p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                  <User className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400" />
+                  <span>{t.authSavedAccountsTitle}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={handleUseAnotherAccount}
+                  className="text-[10px] font-bold text-sky-600 dark:text-sky-400 hover:underline cursor-pointer"
+                >
+                  {t.authUseAnotherAccount}
+                </button>
+              </div>
+
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                {rememberedAccounts.map((acc) => {
+                  const isSelected = selectedAccountId === acc.accountId;
+                  const hasSavedPass = Boolean(acc.password);
+                  return (
+                    <div
+                      key={acc.accountId}
+                      onClick={() => handleSelectRememberedAccount(acc)}
+                      className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 ${
+                        isSelected
+                          ? 'bg-sky-50/90 dark:bg-sky-950/50 border-sky-400 dark:border-sky-600 shadow-2xs'
+                          : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 hover:border-sky-300'
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-xs font-extrabold text-slate-900 dark:text-white truncate">
+                            {acc.fullName}
+                          </span>
+                          {hasSavedPass && (
+                            <span className="inline-flex items-center gap-1 text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 px-1.5 py-0.5 rounded-md shrink-0">
+                              <KeyRound className="w-2.5 h-2.5" />
+                              <span>{t.authSavedPasswordBadge}</span>
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono truncate mt-0.5" dir="ltr">
+                          {acc.displayIdentifier}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        {hasSavedPass && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={(e) => handleForgetPassword(e, acc.accountId)}
+                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
+                              title={t.authForgetPasswordTitle}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isSubmitting}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleQuickLoginAccount(acc);
+                              }}
+                              className="px-2.5 py-1.5 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white rounded-xl text-[11px] font-extrabold transition-colors cursor-pointer shadow-2xs"
+                            >
+                              {t.authQuickSignInBtn}
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {errorMsg && (
             <div className="bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 rounded-2xl p-3 text-xs font-semibold flex items-start gap-2 animate-in fade-in duration-150">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600 dark:text-rose-400" />
@@ -255,7 +441,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
                   inputMode="email"
                   autoComplete="username"
                   value={identifierInput}
-                  onChange={(e) => setIdentifierInput(e.target.value)}
+                  onChange={(e) => {
+                    setIdentifierInput(e.target.value);
+                    setSelectedAccountId(null);
+                  }}
                   placeholder={t.authIdentifierPlaceholder}
                   required
                   dir="ltr"
@@ -325,6 +514,16 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
                 </div>
               </div>
             )}
+
+            <label className="flex items-center gap-2 text-[11px] font-semibold text-slate-600 dark:text-slate-300 cursor-pointer select-none pt-0.5">
+              <input
+                type="checkbox"
+                checked={rememberCredentials}
+                onChange={(e) => setRememberCredentials(e.target.checked)}
+                className="w-4 h-4 rounded accent-sky-600 cursor-pointer shrink-0"
+              />
+              <span>{t.authRememberMeLabel}</span>
+            </label>
 
             <button
               type="submit"
