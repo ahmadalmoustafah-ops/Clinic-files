@@ -128,7 +128,7 @@ export default function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('home');
   const [returnViewAfterForm, setReturnViewAfterForm] = useState<'home' | 'calendar'>('home');
   const [activePatient, setActivePatient] = useState<PatientRecord | null>(null);
-  const [autoAddFollowUp, setAutoAddFollowUp] = useState(false);
+  const [autoAddType, setAutoAddType] = useState<'followup' | 'consultation' | null>(null);
 
   // Modals & Menus
   const [isBackupOpen, setIsBackupOpen] = useState(false);
@@ -266,6 +266,13 @@ export default function App() {
     window.addEventListener(FIELD_SETTINGS_EVENT, onSettingsChanged);
     return () => window.removeEventListener(FIELD_SETTINGS_EVENT, onSettingsChanged);
   }, [currentUser?.id]);
+
+  // Apply global app font size across the entire document root
+  useEffect(() => {
+    if (!isManagerRoute) {
+      FieldSettingsService.applyAppFontSize(fieldSettings.fontSize || 'medium');
+    }
+  }, [fieldSettings.fontSize, isManagerRoute]);
 
   const patientsCountRef = useRef<number>(0);
   patientsCountRef.current = patients.length;
@@ -471,6 +478,8 @@ export default function App() {
         isNewExamOnDay: false,
         isFollowUpOnDay: false,
         followUpCountOnDay: 0,
+        isConsultationOnDay: false,
+        consultationCountOnDay: 0,
       }));
     }
 
@@ -479,18 +488,25 @@ export default function App() {
         const isNewExamOnDay =
           p.examDate === activeDate ||
           (p.createdAt ? p.createdAt.startsWith(activeDate) : false);
-        const matchingFollowUps = (p.followUps || []).filter(
+        const matchingEvents = (p.followUps || []).filter(
           (f) => f.date === activeDate || (f.date && f.date.includes(activeDate))
         );
-        const isFollowUpOnDay = matchingFollowUps.length > 0;
+        const consultationCountOnDay = matchingEvents.filter(
+          (f) => f.kind === 'consultation'
+        ).length;
+        const followUpCountOnDay = matchingEvents.length - consultationCountOnDay;
+        const isFollowUpOnDay = followUpCountOnDay > 0;
+        const isConsultationOnDay = consultationCountOnDay > 0;
         return {
           patient: p,
           isNewExamOnDay,
           isFollowUpOnDay,
-          followUpCountOnDay: matchingFollowUps.length,
+          followUpCountOnDay,
+          isConsultationOnDay,
+          consultationCountOnDay,
         };
       })
-      .filter((item) => item.isNewExamOnDay || item.isFollowUpOnDay);
+      .filter((item) => item.isNewExamOnDay || item.isFollowUpOnDay || item.isConsultationOnDay);
   }, [patients, selectedDayFilter, activeDate]);
 
   // Today's Patients count for quick stats card
@@ -522,7 +538,13 @@ export default function App() {
     if (found) {
       setReturnViewAfterForm(viewMode === 'calendar' ? 'calendar' : 'home');
       setActivePatient(found);
-      setAutoAddFollowUp(action === 'add-followup' || action === 'new-consultation');
+      setAutoAddType(
+        action === 'add-followup'
+          ? 'followup'
+          : action === 'new-consultation'
+          ? 'consultation'
+          : null
+      );
       setViewMode('patient-form');
     }
   };
@@ -536,7 +558,7 @@ export default function App() {
     }
     setReturnViewAfterForm(viewMode === 'calendar' ? 'calendar' : 'home');
     setActivePatient(null);
-    setAutoAddFollowUp(false);
+    setAutoAddType(null);
     setViewMode('patient-form');
   };
 
@@ -630,7 +652,7 @@ export default function App() {
             setViewMode(returnViewAfterForm);
             setReturnViewAfterForm('home');
           }}
-          autoAddFollowUp={autoAddFollowUp}
+          autoAddType={autoAddType}
           fieldSettings={fieldSettings}
         />
       )}
@@ -1094,7 +1116,7 @@ export default function App() {
                 </div>
               ) : (
                 <div className="divide-y divide-slate-100 dark:divide-slate-800/80">
-                  {dayPatients.map(({ patient: p, isNewExamOnDay, isFollowUpOnDay, followUpCountOnDay }) => (
+                  {dayPatients.map(({ patient: p, isNewExamOnDay, isFollowUpOnDay, followUpCountOnDay, isConsultationOnDay, consultationCountOnDay }) => (
                     <div
                       key={p.id}
                       onClick={() => handleOpenPatient(p.id, 'view')}
@@ -1115,6 +1137,11 @@ export default function App() {
                           {isNewExamOnDay && (
                             <span className="text-[10px] text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/70 border border-sky-200 dark:border-sky-800 px-2 py-0.5 rounded-full font-bold">
                               {t.newExamTodayBadge}
+                            </span>
+                          )}
+                          {isConsultationOnDay && (
+                            <span className="text-[10px] text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/70 border border-emerald-200 dark:border-emerald-800 px-2 py-0.5 rounded-full font-bold">
+                              {t.newConsultationTodayBadge} {consultationCountOnDay > 1 ? `(${consultationCountOnDay})` : ''}
                             </span>
                           )}
                           {isFollowUpOnDay && (
@@ -1141,7 +1168,7 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
+                      <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0 flex-wrap">
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -1152,6 +1179,18 @@ export default function App() {
                         >
                           <PlusCircle className="w-3.5 h-3.5" />
                           <span>{t.addFollowUp}</span>
+                        </button>
+
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenPatient(p.id, 'new-consultation');
+                          }}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-teal-50 hover:bg-teal-100 dark:bg-teal-950/60 text-teal-700 dark:text-teal-300 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+                          title={t.newConsultationBtn}
+                        >
+                          <Stethoscope className="w-3.5 h-3.5" />
+                          <span>{t.newConsultationBtn}</span>
                         </button>
                       </div>
                     </div>

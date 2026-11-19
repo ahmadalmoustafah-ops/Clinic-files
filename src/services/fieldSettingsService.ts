@@ -20,15 +20,28 @@ export type SubAccordionKey =
   | 'waiting'
   | 'treatment';
 
+export type AppFontSize = 'small' | 'medium' | 'large' | 'xlarge';
+
+export const APP_FONT_SIZE_PX: Record<AppFontSize, number> = {
+  small: 14,
+  medium: 16,
+  large: 18,
+  xlarge: 20,
+};
+
+const DEVICE_FONT_SIZE_KEY = 'easy_clinic_app_font_size_v1';
+
 export type FollowUpSubKey =
   | 'clinicalEvolution'
   | 'newExam'
   | 'labs'
   | 'investigations'
+  | 'differentialDiagnosis'
   | 'waiting'
   | 'treatment';
 
 export interface ClinicalFieldSettings {
+  fontSize: AppFontSize;
   demographics: Record<DemographicsSubKey, boolean>;
   main: Record<MainAccordionKey, boolean>;
   sub: Record<SubAccordionKey, boolean>;
@@ -58,7 +71,18 @@ export const MAIN_SUB_GROUPS: Record<MainAccordionKey, SubAccordionKey[]> = {
   ],
 };
 
+function readDeviceFontSize(): AppFontSize {
+  try {
+    const val = localStorage.getItem(DEVICE_FONT_SIZE_KEY);
+    if (val === 'small' || val === 'medium' || val === 'large' || val === 'xlarge') {
+      return val;
+    }
+  } catch {}
+  return 'medium';
+}
+
 export const DEFAULT_FIELD_SETTINGS: ClinicalFieldSettings = {
+  fontSize: 'medium',
   demographics: {
     age: true,
     examDate: true,
@@ -91,6 +115,7 @@ export const DEFAULT_FIELD_SETTINGS: ClinicalFieldSettings = {
     newExam: true,
     labs: true,
     investigations: true,
+    differentialDiagnosis: true,
     waiting: true,
     treatment: true,
   },
@@ -100,6 +125,7 @@ export const FIELD_SETTINGS_EVENT = 'easy-clinic-field-settings-changed';
 
 function cloneDefaults(): ClinicalFieldSettings {
   return {
+    fontSize: readDeviceFontSize(),
     demographics: { ...DEFAULT_FIELD_SETTINGS.demographics },
     main: { ...DEFAULT_FIELD_SETTINGS.main },
     sub: { ...DEFAULT_FIELD_SETTINGS.sub },
@@ -113,9 +139,17 @@ function getStorageKey(userId?: string | null): string | null {
   return `easy_clinic_u_${uid}_field_settings_v1`;
 }
 
+function isValidFontSize(val: unknown): val is AppFontSize {
+  return val === 'small' || val === 'medium' || val === 'large' || val === 'xlarge';
+}
+
 function normalizeSettings(raw: Partial<ClinicalFieldSettings> | null | undefined): ClinicalFieldSettings {
   const base = cloneDefaults();
   if (!raw || typeof raw !== 'object') return base;
+
+  if (isValidFontSize(raw.fontSize)) {
+    base.fontSize = raw.fontSize;
+  }
 
   if (raw.demographics && typeof raw.demographics === 'object') {
     (Object.keys(base.demographics) as DemographicsSubKey[]).forEach((k) => {
@@ -153,6 +187,16 @@ function normalizeSettings(raw: Partial<ClinicalFieldSettings> | null | undefine
 }
 
 export const FieldSettingsService = {
+  applyAppFontSize(size: AppFontSize): void {
+    const px = APP_FONT_SIZE_PX[size] || APP_FONT_SIZE_PX.medium;
+    if (typeof document !== 'undefined') {
+      document.documentElement.style.fontSize = `${px}px`;
+    }
+    try {
+      localStorage.setItem(DEVICE_FONT_SIZE_KEY, size);
+    } catch {}
+  },
+
   getSettings(userId?: string | null): ClinicalFieldSettings {
     const key = getStorageKey(userId);
     if (!key) return cloneDefaults();
@@ -168,6 +212,7 @@ export const FieldSettingsService = {
 
   saveSettings(settings: ClinicalFieldSettings, userId?: string | null): ClinicalFieldSettings {
     const normalized = normalizeSettings(settings);
+    this.applyAppFontSize(normalized.fontSize);
     const key = getStorageKey(userId);
     if (key) {
       try {
@@ -181,6 +226,15 @@ export const FieldSettingsService = {
   },
 
   resetSettings(userId?: string | null): ClinicalFieldSettings {
-    return this.saveSettings(cloneDefaults(), userId);
+    return this.saveSettings(
+      {
+        fontSize: 'medium',
+        demographics: { ...DEFAULT_FIELD_SETTINGS.demographics },
+        main: { ...DEFAULT_FIELD_SETTINGS.main },
+        sub: { ...DEFAULT_FIELD_SETTINGS.sub },
+        followUpSub: { ...DEFAULT_FIELD_SETTINGS.followUpSub },
+      },
+      userId
+    );
   },
 };

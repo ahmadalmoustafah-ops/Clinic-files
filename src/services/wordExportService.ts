@@ -559,6 +559,10 @@ export async function exportPatientToWord(
     for (let idx = 0; idx < patient.followUps.length; idx++) {
       const fu = patient.followUps[idx];
       const followUpNumber = patient.followUps.length - idx;
+      const isConsultation = fu.kind === 'consultation';
+      const eventTitle = isConsultation
+        ? t.newConsultationItemTitle
+        : t.followUpItemTitle;
 
       docChildren.push(
         new Paragraph({
@@ -567,9 +571,9 @@ export async function exportPatientToWord(
           spacing: { before: 180, after: 80 },
           children: [
             new TextRun({
-              text: `${t.followUpItemTitle} #${followUpNumber}  —  ${t.autoDatePrefix} ${fu.date}`,
+              text: `${eventTitle} #${followUpNumber}  —  ${t.autoDatePrefix} ${fu.date}`,
               bold: true,
-              color: '0F766E',
+              color: isConsultation ? '0F766E' : '0284C7',
               size: 23,
               font: isRTL ? 'Arial' : 'Calibri',
               rightToLeft: isRTL,
@@ -580,19 +584,29 @@ export async function exportPatientToWord(
 
       docChildren.push(
         makeKeyValueTable(
-          [
-            { label: t.symptoms, value: fu.symptoms ?? fu.clinicalEvolution },
-            { label: t.clinicalExam, value: fu.newExam },
-            { label: t.echo, value: fu.echo || '' },
-            { label: t.labs, value: fu.labs },
-            { label: t.otherInvestigations, value: fu.investigations },
-            { label: t.differentialDiagnosis, value: fu.differentialDiagnosis || '', boldPurple: true },
-            { label: t.waiting, value: fu.waiting },
-            { label: t.treatment, value: fu.treatment },
-          ],
+          isConsultation
+            ? [
+                { label: t.symptoms, value: fu.symptoms || '' },
+                { label: t.clinicalExam, value: fu.newExam },
+                { label: t.echo, value: fu.echo || '' },
+                { label: t.labs, value: fu.labs },
+                { label: t.otherInvestigations, value: fu.investigations },
+                { label: t.differentialDiagnosis, value: fu.differentialDiagnosis || '', boldPurple: true },
+                { label: t.waiting, value: fu.waiting },
+                { label: t.treatment, value: fu.treatment },
+              ]
+            : [
+                { label: t.clinicalEvolution, value: fu.clinicalEvolution || fu.symptoms || '' },
+                { label: t.newExam, value: fu.newExam },
+                { label: t.labsFollowUp, value: fu.labs },
+                { label: t.investigationsFollowUp, value: fu.investigations },
+                { label: t.differentialDiagnosis, value: fu.differentialDiagnosis || '', boldPurple: true },
+                { label: t.waitingFollowUp, value: fu.waiting },
+                { label: t.treatmentFollowUp, value: fu.treatment },
+              ],
           isRTL,
           emptyFallback,
-          'F0FDFA'
+          isConsultation ? 'F0FDFA' : 'F0F9FF'
         )
       );
 

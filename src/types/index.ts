@@ -9,11 +9,12 @@ export interface MedicalImage {
 
 export interface PatientFollowUp {
   id: string;
+  kind?: 'followup' | 'consultation'; // نوع الحدث اللاحق: متابعة أو معاينة جديدة
   date: string; // Formatted date & time (automatically stamped)
-  symptoms?: string; // الأعراض والشكوى الرئيسية
-  clinicalEvolution: string; // التطور السريري (توافق مع النسخ السابقة)
+  symptoms?: string; // الأعراض والشكوى الرئيسية (للمعاينة الجديدة)
+  clinicalEvolution: string; // التطور السريري (للمتابعة)
   newExam: string; // الفحص السريري الجديد
-  echo?: string; // الإيكو
+  echo?: string; // الإيكو (للمعاينة الجديدة)
   labs: string; // المخبريات
   investigations: string; // الاستقصاءات الأخرى
   differentialDiagnosis?: string; // التشخيص التفريقي

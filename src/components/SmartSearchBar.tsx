@@ -84,8 +84,8 @@ export const SmartSearchBar: React.FC<SmartSearchBarProps> = ({
           p.examDate.includes(dateQuery) ||
           (p.createdAt && p.createdAt.startsWith(dateQuery));
 
-        // B: Did this patient have a Follow-Up visit on this date?
-        const matchingFollowUps =
+        // B: Did this patient have a Follow-Up or New Consultation on this date?
+        const matchingEvents =
           p.followUps?.filter((fu) => {
             return (
               fu.date.includes(dateQuery) ||
@@ -93,7 +93,15 @@ export const SmartSearchBar: React.FC<SmartSearchBarProps> = ({
             );
           }) || [];
 
+        const matchingConsultations = matchingEvents.filter(
+          (fu) => fu.kind === 'consultation'
+        );
+        const matchingFollowUps = matchingEvents.filter(
+          (fu) => fu.kind !== 'consultation'
+        );
+
         const hasFollowUpOnDate = matchingFollowUps.length > 0;
+        const hasConsultationOnDate = matchingConsultations.length > 0;
 
         // 2. Check Name / Phone / Address Matches:
         const isTextMatch =
@@ -101,14 +109,18 @@ export const SmartSearchBar: React.FC<SmartSearchBarProps> = ({
           normPhone.includes(normalizedQuery) ||
           normAddress.includes(normalizedQuery);
 
-        const isMatch = isTextMatch || isNewExamOnDate || hasFollowUpOnDate;
+        const isMatch =
+          isTextMatch || isNewExamOnDate || hasFollowUpOnDate || hasConsultationOnDate;
 
         return {
           patient: p,
           isMatch,
           isNewExamOnDate,
           hasFollowUpOnDate,
+          hasConsultationOnDate,
           matchingFollowUps,
+          matchingConsultations,
+          matchingEvents,
           isTextMatch,
         };
       })
@@ -146,6 +158,7 @@ export const SmartSearchBar: React.FC<SmartSearchBarProps> = ({
   };
 
   const newExamsCount = matchedPatientsWithReasons.filter((m) => m.isNewExamOnDate).length;
+  const consultationsCount = matchedPatientsWithReasons.filter((m) => m.hasConsultationOnDate).length;
   const followUpsCount = matchedPatientsWithReasons.filter((m) => m.hasFollowUpOnDate).length;
 
   return (
@@ -222,7 +235,7 @@ export const SmartSearchBar: React.FC<SmartSearchBarProps> = ({
               </span>
               {isDateSearch && (
                 <span className="text-[11px] text-sky-700 bg-sky-100/70 dark:bg-sky-900/60 px-2 py-0.5 rounded-md font-mono">
-                  {dateQuery} ({newExamsCount} كشف جديد · {followUpsCount} متابعة)
+                  {dateQuery} ({newExamsCount} · {consultationsCount} · {followUpsCount})
                 </span>
               )}
             </div>
@@ -250,7 +263,15 @@ export const SmartSearchBar: React.FC<SmartSearchBarProps> = ({
           ) : (
             <div className="divide-y divide-slate-100 dark:divide-slate-800/80">
               {matchedPatientsWithReasons.map(
-                ({ patient, isNewExamOnDate, hasFollowUpOnDate, matchingFollowUps }) => (
+                ({
+                  patient,
+                  isNewExamOnDate,
+                  hasFollowUpOnDate,
+                  hasConsultationOnDate,
+                  matchingFollowUps,
+                  matchingConsultations,
+                  matchingEvents,
+                }) => (
                   <div
                     key={patient.id}
                     onClick={() => handleSelect(patient.id, 'view')}
@@ -268,7 +289,7 @@ export const SmartSearchBar: React.FC<SmartSearchBarProps> = ({
                             </span>
                           )}
 
-                          {/* Date Match Badges (New Exam on this date / Follow-up on this date) */}
+                          {/* Date Match Badges (New Exam / New Consultation / Follow-up) */}
                           {isNewExamOnDate && (
                             <span className="text-[10px] font-bold text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 px-2 py-0.5 rounded-md flex items-center gap-1">
                               <Sparkles className="w-3 h-3 text-emerald-600" />
@@ -276,9 +297,18 @@ export const SmartSearchBar: React.FC<SmartSearchBarProps> = ({
                             </span>
                           )}
 
-                          {hasFollowUpOnDate && (
+                          {hasConsultationOnDate && (
                             <span className="text-[10px] font-bold text-teal-800 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/60 border border-teal-200 dark:border-teal-800 px-2 py-0.5 rounded-md flex items-center gap-1">
-                              <HeartPulse className="w-3 h-3 text-teal-600" />
+                              <Stethoscope className="w-3 h-3 text-teal-600" />
+                              <span>
+                                {t.newConsultationOnDateBadge} ({matchingConsultations.length})
+                              </span>
+                            </span>
+                          )}
+
+                          {hasFollowUpOnDate && (
+                            <span className="text-[10px] font-bold text-sky-800 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/60 border border-sky-200 dark:border-sky-800 px-2 py-0.5 rounded-md flex items-center gap-1">
+                              <HeartPulse className="w-3 h-3 text-sky-600" />
                               <span>
                                 {t.followUpOnDateBadge} ({matchingFollowUps.length})
                               </span>
@@ -302,20 +332,22 @@ export const SmartSearchBar: React.FC<SmartSearchBarProps> = ({
                           )}
                         </div>
 
-                        {/* Details of follow-up on that specific date if matched */}
-                        {hasFollowUpOnDate && matchingFollowUps.length > 0 && (
+                        {/* Details of follow-up or consultation on that specific date if matched */}
+                        {matchingEvents.length > 0 && (
                           <div className="mt-1.5 p-2 bg-teal-50/70 dark:bg-teal-950/30 border border-teal-100 dark:border-teal-900/50 rounded-xl text-xs text-teal-900 dark:text-teal-200">
                             <span className="font-semibold block text-[11px] text-teal-700 dark:text-teal-400">
-                              متابعة مسجلة في هذا اليوم:
+                              {matchingEvents[0].kind === 'consultation'
+                                ? t.newConsultationOnDateBadge
+                                : t.followUpOnDateBadge}:
                             </span>
                             <p className="line-clamp-1 text-[11px] opacity-90 mt-0.5">
                               {stripHtmlToPlainText(
-                                matchingFollowUps[0].symptoms ||
-                                  matchingFollowUps[0].clinicalEvolution ||
-                                  matchingFollowUps[0].newExam ||
-                                  matchingFollowUps[0].treatment ||
+                                matchingEvents[0].symptoms ||
+                                  matchingEvents[0].clinicalEvolution ||
+                                  matchingEvents[0].newExam ||
+                                  matchingEvents[0].treatment ||
                                   ''
-                              ) || matchingFollowUps[0].date}
+                              ) || matchingEvents[0].date}
                             </p>
                           </div>
                         )}
