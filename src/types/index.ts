@@ -30,6 +30,7 @@ export interface PatientRecord {
   name: string; // الاسم
   age: string; // العمر
   address: string; // السكن
+  pregnancyOrLactation?: string; // الحمل أو الإرضاع
   examDate: string; // تاريخ الكشف (تلقائي وفق تاريخ الهاتف)
   phone?: string; // رقم الهاتف للتواصل والمواعيد
 
@@ -68,7 +69,7 @@ export interface Appointment {
   patientId?: string; // Optional reference to existing patient
   patientName: string;
   phone?: string;
-  title: string; // تسمية الموعد (ملاحظات تفصيلية بما لا يقل عن 50 حرفاً)
+  title: string; // تسمية الموعد وملاحظاته
   status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
   createdAt: string;
 }

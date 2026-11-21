@@ -66,6 +66,8 @@ export const BackupModal: React.FC<BackupModalProps> = ({
     hasSnapshot: false,
   });
 
+  const [confirmReplaceOpen, setConfirmReplaceOpen] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadStats = async () => {
@@ -125,6 +127,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({
       loadStats();
       setStatus(null);
       setImportPreview(null);
+      setConfirmReplaceOpen(false);
 
       const onAutoBackupCompleted = () => {
         loadStats();
@@ -209,20 +212,8 @@ export const BackupModal: React.FC<BackupModalProps> = ({
     e.target.value = '';
   };
 
-  const handleConfirmImport = async () => {
+  const executeImport = async () => {
     if (!importPreview) return;
-
-    if (
-      importMode === 'replace' &&
-      !window.confirm(
-        language === 'ar'
-          ? 'تنبيه مهم: وضع "الاستبدال الكامل" سيقوم بحذف كافة السجلات الحالية على هذا الجهاز واستبدالها بالنسخة المسترجعة. هل أنت متأكد؟'
-          : 'Warning: Replace mode will wipe all current local records and overwrite with this backup. Proceed?'
-      )
-    ) {
-      return;
-    }
-
     try {
       setIsProcessing(true);
       const res = await StorageService.importBackup(importPreview.rawJson, importMode);
@@ -234,6 +225,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({
             : `Backup restored successfully! Migrated (${res.importedPatients}) patients and (${res.importedAppointments}) visits.`
         );
         setImportPreview(null);
+        setConfirmReplaceOpen(false);
         await loadStats();
         onDataRestored();
       } else {
@@ -246,6 +238,17 @@ export const BackupModal: React.FC<BackupModalProps> = ({
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const handleConfirmImport = async () => {
+    if (!importPreview) return;
+
+    if (importMode === 'replace' && !confirmReplaceOpen) {
+      setConfirmReplaceOpen(true);
+      return;
+    }
+
+    await executeImport();
   };
 
   const formatDateTime = (iso: string | null) => {
@@ -576,7 +579,10 @@ export const BackupModal: React.FC<BackupModalProps> = ({
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
-                      onClick={() => setImportMode('merge')}
+                      onClick={() => {
+                        setImportMode('merge');
+                        setConfirmReplaceOpen(false);
+                      }}
                       className={`p-2.5 rounded-xl border text-right transition-all text-xs cursor-pointer ${
                         importMode === 'merge'
                           ? 'border-sky-500 bg-sky-50 dark:bg-sky-950/60 text-sky-900 dark:text-sky-200 font-bold'
@@ -602,20 +608,45 @@ export const BackupModal: React.FC<BackupModalProps> = ({
                   </div>
                 </div>
 
+                {confirmReplaceOpen && importMode === 'replace' && (
+                  <div className="p-3 bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 rounded-xl text-xs text-rose-800 dark:text-rose-200 space-y-2">
+                    <p className="font-bold leading-relaxed">
+                      {language === 'ar'
+                        ? 'تنبيه مهم: وضع "الاستبدال الكامل" سيقوم بحذف كافة السجلات الحالية على هذا الجهاز واستبدالها بالنسخة المسترجعة. هل أنت متأكد؟'
+                        : 'Warning: Replace mode will wipe all current local records and overwrite with this backup. Proceed?'}
+                    </p>
+                  </div>
+                )}
+
                 <div className="pt-2 flex items-center justify-end gap-2">
                   <button
-                    onClick={() => setImportPreview(null)}
-                    className="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-700"
+                    onClick={() => {
+                      setImportPreview(null);
+                      setConfirmReplaceOpen(false);
+                    }}
+                    className="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-700 cursor-pointer"
                   >
                     {t.cancel}
                   </button>
                   <button
                     onClick={handleConfirmImport}
                     disabled={isProcessing}
-                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
+                    className={`px-4 py-2 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer flex items-center gap-1.5 ${
+                      confirmReplaceOpen && importMode === 'replace'
+                        ? 'bg-rose-600 hover:bg-rose-700'
+                        : 'bg-emerald-600 hover:bg-emerald-700'
+                    }`}
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${isProcessing ? 'animate-spin' : ''}`} />
-                    <span>{isProcessing ? t.restoring : t.confirmRestoreBtn}</span>
+                    <span>
+                      {isProcessing
+                        ? t.restoring
+                        : confirmReplaceOpen && importMode === 'replace'
+                        ? language === 'ar'
+                          ? 'تأكيد الاستبدال الكامل'
+                          : 'Confirm Full Replace'
+                        : t.confirmRestoreBtn}
+                    </span>
                   </button>
                 </div>
               </div>

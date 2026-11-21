@@ -22,7 +22,6 @@ const listeners = new Set<Listener>();
 let swRegistration: ServiceWorkerRegistration | undefined;
 let updateSWFn: ((reloadPage?: boolean) => Promise<void>) | undefined;
 let initialized = false;
-let intervalId: number | undefined;
 
 function emit() {
   const snapshot = { ...state };
@@ -34,8 +33,22 @@ function setState(patch: Partial<AppUpdateState>) {
   emit();
 }
 
+function isManagerRoutePath(): boolean {
+  if (typeof window === 'undefined') return false;
+  const pathname = window.location.pathname.replace(/\/+$/, '');
+  const searchParams = new URLSearchParams(window.location.search);
+  return (
+    pathname === '/manager' ||
+    searchParams.get('page') === 'manager' ||
+    window.location.hash === '#/manager'
+  );
+}
+
 async function checkRemoteVersion(): Promise<boolean> {
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return false;
+  }
+  if (isManagerRoutePath()) {
     return false;
   }
 
@@ -48,8 +61,15 @@ async function checkRemoteVersion(): Promise<boolean> {
       },
     });
     if (!res.ok) return false;
-    const data = (await res.json()) as { buildId?: string };
+    const data = (await res.json()) as { buildId?: string; userBuildId?: string };
+    const currentUserBuildId = typeof __USER_BUILD_ID__ !== 'undefined' ? __USER_BUILD_ID__ : '';
     const currentBuildId = typeof __APP_BUILD_ID__ !== 'undefined' ? __APP_BUILD_ID__ : '';
+
+    // Ignore updates restricted solely to the manager portal (ManagerDashboard)
+    if (data?.userBuildId && currentUserBuildId) {
+      return data.userBuildId !== currentUserBuildId;
+    }
+
     if (data?.buildId && currentBuildId && data.buildId !== currentBuildId) {
       return true;
     }
@@ -63,17 +83,18 @@ export function initAppUpdateManager(): void {
   if (initialized || typeof window === 'undefined') return;
   initialized = true;
 
+  // Automatic background update notifications to user accounts are intentionally disabled.
+  // Also skip service worker update registration on the independent manager portal.
+  if (isManagerRoutePath()) return;
+
   try {
     updateSWFn = registerSW({
       immediate: true,
       onNeedRefresh() {
-        setState({ hasUpdate: true });
+        // Do not push automatic update notifications to user accounts
       },
       onRegisteredSW(_swUrl, registration) {
         swRegistration = registration;
-        if (registration?.waiting) {
-          setState({ hasUpdate: true });
-        }
       },
       onRegisterError(err) {
         console.warn('SW registration notice:', err);
@@ -82,44 +103,6 @@ export function initAppUpdateManager(): void {
   } catch (err) {
     console.warn('PWA register skipped:', err);
   }
-
-  // Listen for waiting service worker updates directly if available
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.ready
-      .then((reg) => {
-        swRegistration = reg;
-        if (reg.waiting) {
-          setState({ hasUpdate: true });
-        }
-        reg.addEventListener('updatefound', () => {
-          const installing = reg.installing;
-          if (!installing) return;
-          installing.addEventListener('statechange', () => {
-            if (installing.state === 'installed' && navigator.serviceWorker.controller) {
-              setState({ hasUpdate: true });
-            }
-          });
-        });
-      })
-      .catch(() => {});
-  }
-
-  // Background check on startup (after a short delay), focus/visibility, online regain, and every 2 mins
-  const runSilentCheck = () => {
-    if (navigator.onLine) {
-      void AppUpdateManager.checkForUpdates(true);
-    }
-  };
-
-  setTimeout(runSilentCheck, 4000);
-  intervalId = window.setInterval(runSilentCheck, 2 * 60 * 1000);
-
-  window.addEventListener('online', runSilentCheck);
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      runSilentCheck();
-    }
-  });
 }
 
 export const AppUpdateManager = {
@@ -139,34 +122,28 @@ export const AppUpdateManager = {
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       return 'offline';
     }
+    if (isManagerRoutePath()) {
+      return 'up-to-date';
+    }
 
     if (!silent) {
       setState({ isChecking: true });
     }
 
     try {
-      let foundUpdate = state.hasUpdate;
+      const versionChanged = await checkRemoteVersion();
+      let foundUpdate = false;
 
-      if (swRegistration) {
-        try {
-          await swRegistration.update();
-          if (swRegistration.waiting) {
-            foundUpdate = true;
-          }
-        } catch {
-          // Ignore SW update check errors if dev server or offline
-        }
-      }
-
-      if (!foundUpdate) {
-        const versionChanged = await checkRemoteVersion();
-        if (versionChanged) {
-          foundUpdate = true;
+      if (versionChanged) {
+        foundUpdate = true;
+        if (swRegistration) {
+          await swRegistration.update().catch(() => {});
         }
       }
 
       setState({
-        hasUpdate: foundUpdate,
+        // Never emit automatic notifications when running silently
+        hasUpdate: silent ? false : foundUpdate,
         lastCheckedAt: new Date().toISOString(),
         ...(silent ? {} : { isChecking: false }),
       });
@@ -189,17 +166,14 @@ export const AppUpdateManager = {
         await swRegistration.update().catch(() => {});
       }
 
-      // If waiting SW exists, activate it and reload cleanly
       if (swRegistration?.waiting && updateSWFn) {
         await updateSWFn(true);
-        // Fallback reload in case controllerchange doesn't reload automatically
         setTimeout(() => {
           window.location.reload();
         }, 900);
         return;
       }
 
-      // Clear Service Worker asset caches only (NEVER touch localStorage or IndexedDB)
       if ('caches' in window) {
         const cacheNames = await caches.keys();
         await Promise.all(
@@ -221,9 +195,5 @@ export const AppUpdateManager = {
     }
   },
 
-  cleanup() {
-    if (intervalId !== undefined) {
-      clearInterval(intervalId);
-    }
-  },
+  cleanup() {},
 };

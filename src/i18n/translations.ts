@@ -42,6 +42,8 @@ export const translations = {
     // Advance Reminder Alert
     reminderAlertTitle: 'تذكير مسبق: لديك ({count}) مواعيد مجدولة ليوم الغد!',
     reminderAlertDesc: 'اضغط لعرض تفاصيل المواعيد والاستعداد للزيارة السريرية',
+    hideHomeReminderBtn: 'إيقاف',
+    homeReminderHiddenToast: 'تم إيقاف ظهور إشعار التذكير في الصفحة الرئيسية (يمكنك إعادة تفعيله من الإعدادات)',
     noTomorrowAppointments: 'لا توجد مواعيد معلقة ليوم الغد',
     reminderSystemActive: 'نظام التذكير المسبق نشط',
 
@@ -133,8 +135,13 @@ export const translations = {
     age: 'العمر',
     agePlaceholder: 'مثال: 42 سنة',
     examDateAuto: 'تاريخ الكشف (تلقائي)',
-    residence: 'مكان السكن / العنوان',
+    residence: 'السكن',
     residencePlaceholder: 'المدينة، الحي، الشارع...',
+    pregnancyOrLactation: 'الحمل أو الإرضاع',
+    pregnancyOrLactationPlaceholder: 'مثال: حامل (الشهر ...) / مرضع / لا يوجد...',
+    pregnancyNoneOption: 'لا يوجد',
+    pregnancyPregnantOption: 'حامل',
+    pregnancyLactatingOption: 'مرضع',
     phone: 'رقم الهاتف (للتواصل وحجز المواعيد)',
 
     // Medical History
@@ -244,8 +251,7 @@ export const translations = {
     patientFullNameRequired: 'اسم المريض بالكامل...',
     phoneNumberForReminder: 'رقم الهاتف (لإرسال التذكيرات)',
     appointmentTitleLabel: 'تسمية الموعد وملاحظات الفحص',
-    charsMinimum: 'حرفاً كحد أدنى',
-    appointmentTitlePlaceholder: 'اكتب تسمية تفصيلية للموعد تشمل سبب الزيارة، الفحوصات المقررة، أو الإجراء السريري المطلوب (بما لا يقل عن 50 حرفاً)...',
+    appointmentTitlePlaceholder: 'اكتب تسمية الموعد أو سبب الزيارة والفحوصات المقررة...',
     suggestedTemplates: 'قوالب سريعة مقترحة (اضغط للإضافة):',
     template1: '+ متابعة دورية وتقييم علاج',
     template2: '+ فحص إيكو وأشعة شامل',
@@ -425,6 +431,7 @@ export const translations = {
     settingsResetAll: 'تفعيل الكل (الافتراضي)',
     settingsSavedToast: 'تم تحديث الإعدادات بنجاح',
     settingsAllHiddenHint: 'جميع السحابات مخفية من الإعدادات — يمكنك إعادة تفعيلها من قائمة الثلاث نقاط > الإعدادات.',
+    settingsHomeReminderLabel: 'إظهار إشعار تذكير المواعيد في الصفحة الرئيسية',
 
     // Arabic Months and Days
     months: [
@@ -477,6 +484,8 @@ export const translations = {
     // Advance Reminder Alert
     reminderAlertTitle: 'Advance Reminder: You have ({count}) appointments tomorrow!',
     reminderAlertDesc: 'Click to view appointment details and prepare for clinical visits',
+    hideHomeReminderBtn: 'Turn off',
+    homeReminderHiddenToast: 'Home appointment reminder hidden (you can re-enable it in Settings)',
     noTomorrowAppointments: 'No pending appointments for tomorrow',
     reminderSystemActive: 'Advance reminder system active',
 
@@ -570,6 +579,11 @@ export const translations = {
     examDateAuto: 'Exam Date (Automatic)',
     residence: 'Address / Residence',
     residencePlaceholder: 'City, District, Street...',
+    pregnancyOrLactation: 'Pregnancy or Lactation',
+    pregnancyOrLactationPlaceholder: 'e.g. Pregnant / Lactating / None...',
+    pregnancyNoneOption: 'None',
+    pregnancyPregnantOption: 'Pregnant',
+    pregnancyLactatingOption: 'Lactating',
     phone: 'Phone Number (for contact & booking)',
 
     // Medical History
@@ -679,8 +693,7 @@ export const translations = {
     patientFullNameRequired: 'Full patient name...',
     phoneNumberForReminder: 'Phone Number (for reminder notifications)',
     appointmentTitleLabel: 'Appointment Title & Clinical Notes',
-    charsMinimum: 'characters minimum',
-    appointmentTitlePlaceholder: 'Write detailed appointment notes including reason for visit, planned tests, or procedures (minimum 50 characters required)...',
+    appointmentTitlePlaceholder: 'Write appointment title, reason for visit, or planned tests...',
     suggestedTemplates: 'Suggested Quick Templates (click to append):',
     template1: '+ Routine clinical follow-up',
     template2: '+ Full echo & imaging exam',
@@ -860,6 +873,7 @@ export const translations = {
     settingsResetAll: 'Enable All (Default)',
     settingsSavedToast: 'Settings updated successfully',
     settingsAllHiddenHint: 'All clinical sections are hidden via Settings — you can re-enable them from Options > Settings.',
+    settingsHomeReminderLabel: 'Show appointment reminder banner on Home screen',
 
     // English Months and Days
     months: [

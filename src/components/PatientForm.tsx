@@ -85,6 +85,7 @@ export const PatientForm: React.FC<PatientFormProps> = ({
       name: '',
       age: '',
       address: '',
+      pregnancyOrLactation: '',
       phone: '',
       examDate: getFormattedToday(), // تضعه تلقائياً وفقاً لتاريخ الهاتف
       habits: '',
@@ -116,7 +117,7 @@ export const PatientForm: React.FC<PatientFormProps> = ({
   const isExistingFile = Boolean(initialPatient);
   const [expandedSubFields, setExpandedSubFields] = useState<Record<string, boolean>>({});
   const [editingDemoField, setEditingDemoField] = useState<
-    'name' | 'age' | 'address' | 'phone' | null
+    'name' | 'age' | 'address' | 'pregnancyOrLactation' | 'phone' | null
   >(null);
 
   // Ensure all sub-accordions auto-close on exit/re-entry
@@ -289,6 +290,7 @@ export const PatientForm: React.FC<PatientFormProps> = ({
       p.name,
       p.age,
       p.address,
+      p.pregnancyOrLactation,
       p.phone,
       p.habits,
       p.medicalHistory,
@@ -429,6 +431,7 @@ export const PatientForm: React.FC<PatientFormProps> = ({
   const handleSave = async () => {
     if (!patient.name.trim()) {
       setActiveTab('details');
+      setExpandedSubFields((prev) => ({ ...prev, demographics: true }));
       showToast(t.enterPatientNameWarning, 'warning');
       return;
     }
@@ -665,159 +668,250 @@ export const PatientForm: React.FC<PatientFormProps> = ({
         {/* TAB 1: Patient Primary Details & Clinical Exam */}
         {activeTab === 'details' && (
           <div className="space-y-4">
-            {/* 1. Basic Demographics Section (Always Open; Read Mode on Re-entry, Tap to Edit) */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs">
-              <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-100 dark:border-slate-800">
-                <User className="w-4 h-4 text-sky-600" />
-                <h2 className="text-xs font-bold uppercase tracking-wide text-slate-700 dark:text-slate-300">
-                  {t.demographicsSection}
-                </h2>
-              </div>
+            {/* 1. Basic Demographics Main Accordion (Opens as One Single Card without sub-accordions) */}
+            {(() => {
+              const isDemoOpen = Boolean(expandedSubFields['demographics']);
+              const hasDemoContent = Boolean(
+                patient.name.trim() ||
+                  patient.age.trim() ||
+                  patient.address.trim() ||
+                  (patient.pregnancyOrLactation || '').trim() ||
+                  (patient.phone || '').trim()
+              );
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                {/* Patient Name */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    {t.patientFullName} <span className="text-rose-500">*</span>
-                  </label>
-                  {isExistingFile && patient.name.trim() && editingDemoField !== 'name' ? (
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => setEditingDemoField('name')}
-                      className="w-full text-sm px-3.5 py-2.5 bg-slate-50/80 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl font-semibold text-slate-900 dark:text-white cursor-pointer hover:border-sky-400 transition-all flex items-center justify-between gap-2 select-text"
-                      dir={isRTL ? 'rtl' : 'ltr'}
-                    >
-                      <span>{patient.name}</span>
-                      <Pencil className="w-3.5 h-3.5 text-sky-500 shrink-0 opacity-75" />
+              return (
+                <div className="bg-sky-50/75 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800/80 rounded-2xl overflow-hidden shadow-xs">
+                  <button
+                    type="button"
+                    onClick={() => toggleSubField('demographics')}
+                    className="w-full px-4 py-3 flex items-center justify-between gap-2 text-start hover:bg-sky-100/70 dark:hover:bg-sky-900/40 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <User className="w-4 h-4 text-sky-600 dark:text-sky-400 shrink-0" />
+                      <h2 className="text-xs font-extrabold text-sky-950 dark:text-sky-100 truncate">
+                        {t.demographicsSection}
+                      </h2>
+                      {hasDemoContent && (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-sky-100 dark:bg-sky-900/70 text-sky-700 dark:text-sky-300 shrink-0 truncate max-w-[140px]">
+                          {patient.name.trim() ? patient.name.trim() : t.recordedBadge}
+                        </span>
+                      )}
                     </div>
-                  ) : (
-                    <input
-                      type="text"
-                      autoFocus={isExistingFile && editingDemoField === 'name'}
-                      value={patient.name}
-                      onChange={(e) => updateField('name', e.target.value)}
-                      onBlur={() => setEditingDemoField(null)}
-                      placeholder={t.patientNamePlaceholder}
-                      className="w-full text-sm px-3.5 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all font-semibold"
-                      dir={isRTL ? 'rtl' : 'ltr'}
-                    />
-                  )}
-                </div>
+                    <span className="text-sky-600 dark:text-sky-400 shrink-0">
+                      {isDemoOpen ? (
+                        <ChevronUp className="w-4 h-4" />
+                      ) : (
+                        <ChevronDown className="w-4 h-4" />
+                      )}
+                    </span>
+                  </button>
 
-                {/* Age & Auto Exam Date (controlled by Field Settings) */}
-                {(activeFieldSettings.demographics.age || activeFieldSettings.demographics.examDate) && (
-                  <div className="grid grid-cols-2 gap-2">
-                    {activeFieldSettings.demographics.age && (
-                      <div className={!activeFieldSettings.demographics.examDate ? 'col-span-2' : ''}>
+                  {isDemoOpen && (
+                    <div className="bg-white dark:bg-slate-900 border-t border-sky-200/70 dark:border-sky-800/70 p-4 space-y-3.5">
+                      {/* Patient Name (Full Width) */}
+                      <div>
                         <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                          {t.age}
+                          {t.patientFullName} <span className="text-rose-500">*</span>
                         </label>
-                        {isExistingFile && patient.age.trim() && editingDemoField !== 'age' ? (
+                        {isExistingFile && patient.name.trim() && editingDemoField !== 'name' ? (
                           <div
                             role="button"
                             tabIndex={0}
-                            onClick={() => setEditingDemoField('age')}
-                            className="w-full text-sm px-3.5 py-2.5 bg-slate-50/80 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white cursor-pointer hover:border-sky-400 transition-all flex items-center justify-between gap-1 select-text"
+                            onClick={() => setEditingDemoField('name')}
+                            className="w-full text-sm px-3.5 py-2.5 bg-slate-50/80 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl font-semibold text-slate-900 dark:text-white cursor-pointer hover:border-sky-400 transition-all flex items-center justify-between gap-2 select-text"
                             dir={isRTL ? 'rtl' : 'ltr'}
                           >
-                            <span className="truncate">{patient.age}</span>
-                            <Pencil className="w-3 h-3 text-sky-500 shrink-0 opacity-75" />
+                            <span>{patient.name}</span>
+                            <Pencil className="w-3.5 h-3.5 text-sky-500 shrink-0 opacity-75" />
                           </div>
                         ) : (
                           <input
                             type="text"
-                            autoFocus={isExistingFile && editingDemoField === 'age'}
-                            value={patient.age}
-                            onChange={(e) => updateField('age', e.target.value)}
+                            autoFocus={isExistingFile && editingDemoField === 'name'}
+                            value={patient.name}
+                            onChange={(e) => updateField('name', e.target.value)}
                             onBlur={() => setEditingDemoField(null)}
-                            placeholder={t.agePlaceholder}
-                            className="w-full text-sm px-3.5 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
+                            placeholder={t.patientNamePlaceholder}
+                            className="w-full text-sm px-3.5 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all font-semibold"
                             dir={isRTL ? 'rtl' : 'ltr'}
                           />
                         )}
                       </div>
-                    )}
 
-                    {activeFieldSettings.demographics.examDate && (
-                      <div className={!activeFieldSettings.demographics.age ? 'col-span-2' : ''}>
-                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                          {t.examDateAuto}
-                        </label>
-                        <div className="flex items-center gap-1.5 px-3 py-2.5 bg-sky-50/60 dark:bg-sky-950/40 border border-sky-100 dark:border-sky-900 rounded-xl text-xs text-sky-800 dark:text-sky-300 font-semibold">
-                          <Calendar className="w-3.5 h-3.5 text-sky-600 shrink-0" />
-                          <span>{patient.examDate}</span>
+                      {/* Age & Residence Side-by-Side */}
+                      {(activeFieldSettings.demographics.age || activeFieldSettings.demographics.address) && (
+                        <div className="grid grid-cols-2 gap-2.5">
+                          {activeFieldSettings.demographics.age && (
+                            <div className={!activeFieldSettings.demographics.address ? 'col-span-2' : ''}>
+                              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {t.age}
+                              </label>
+                              {isExistingFile && patient.age.trim() && editingDemoField !== 'age' ? (
+                                <div
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={() => setEditingDemoField('age')}
+                                  className="w-full text-sm px-3 py-2.5 bg-slate-50/80 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white cursor-pointer hover:border-sky-400 transition-all flex items-center justify-between gap-1 select-text"
+                                  dir={isRTL ? 'rtl' : 'ltr'}
+                                >
+                                  <span className="truncate">{patient.age}</span>
+                                  <Pencil className="w-3 h-3 text-sky-500 shrink-0 opacity-75" />
+                                </div>
+                              ) : (
+                                <input
+                                  type="text"
+                                  autoFocus={isExistingFile && editingDemoField === 'age'}
+                                  value={patient.age}
+                                  onChange={(e) => updateField('age', e.target.value)}
+                                  onBlur={() => setEditingDemoField(null)}
+                                  placeholder={t.agePlaceholder}
+                                  className="w-full text-sm px-3 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
+                                  dir={isRTL ? 'rtl' : 'ltr'}
+                                />
+                              )}
+                            </div>
+                          )}
+
+                          {activeFieldSettings.demographics.address && (
+                            <div className={!activeFieldSettings.demographics.age ? 'col-span-2' : ''}>
+                              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {t.residence}
+                              </label>
+                              {isExistingFile && patient.address.trim() && editingDemoField !== 'address' ? (
+                                <div
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={() => setEditingDemoField('address')}
+                                  className="w-full text-sm px-3 py-2.5 bg-slate-50/80 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white cursor-pointer hover:border-sky-400 transition-all flex items-center justify-between gap-1 select-text"
+                                  dir={isRTL ? 'rtl' : 'ltr'}
+                                >
+                                  <span className="truncate">{patient.address}</span>
+                                  <Pencil className="w-3 h-3 text-sky-500 shrink-0 opacity-75" />
+                                </div>
+                              ) : (
+                                <input
+                                  type="text"
+                                  autoFocus={isExistingFile && editingDemoField === 'address'}
+                                  value={patient.address}
+                                  onChange={(e) => updateField('address', e.target.value)}
+                                  onBlur={() => setEditingDemoField(null)}
+                                  placeholder={t.residencePlaceholder}
+                                  className="w-full text-sm px-3 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
+                                  dir={isRTL ? 'rtl' : 'ltr'}
+                                />
+                              )}
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    )}
-                  </div>
-                )}
+                      )}
 
-                {/* Address */}
-                {activeFieldSettings.demographics.address && (
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {t.residence}
-                    </label>
-                    {isExistingFile && patient.address.trim() && editingDemoField !== 'address' ? (
-                      <div
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => setEditingDemoField('address')}
-                        className="w-full text-sm px-3.5 py-2.5 bg-slate-50/80 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white cursor-pointer hover:border-sky-400 transition-all flex items-center justify-between gap-2 select-text"
-                        dir={isRTL ? 'rtl' : 'ltr'}
-                      >
-                        <span>{patient.address}</span>
-                        <Pencil className="w-3.5 h-3.5 text-sky-500 shrink-0 opacity-75" />
-                      </div>
-                    ) : (
-                      <input
-                        type="text"
-                        autoFocus={isExistingFile && editingDemoField === 'address'}
-                        value={patient.address}
-                        onChange={(e) => updateField('address', e.target.value)}
-                        onBlur={() => setEditingDemoField(null)}
-                        placeholder={t.residencePlaceholder}
-                        className="w-full text-sm px-3.5 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
-                        dir={isRTL ? 'rtl' : 'ltr'}
-                      />
-                    )}
-                  </div>
-                )}
+                      {/* Pregnancy or Lactation (Directly underneath Age & Residence) */}
+                      {activeFieldSettings.demographics.pregnancyOrLactation && (
+                        <div>
+                          <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
+                            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                              {t.pregnancyOrLactation}
+                            </label>
+                            <div className="flex items-center gap-1">
+                              {[t.pregnancyNoneOption, t.pregnancyPregnantOption, t.pregnancyLactatingOption].map((opt) => (
+                                <button
+                                  key={opt}
+                                  type="button"
+                                  onClick={() => {
+                                    updateField('pregnancyOrLactation', opt);
+                                    setEditingDemoField(null);
+                                  }}
+                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border transition-colors cursor-pointer ${
+                                    (patient.pregnancyOrLactation || '') === opt
+                                      ? 'bg-sky-600 text-white border-sky-600'
+                                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-sky-400'
+                                  }`}
+                                >
+                                  {opt}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          {isExistingFile &&
+                          (patient.pregnancyOrLactation || '').trim() &&
+                          editingDemoField !== 'pregnancyOrLactation' ? (
+                            <div
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => setEditingDemoField('pregnancyOrLactation')}
+                              className="w-full text-sm px-3.5 py-2.5 bg-slate-50/80 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white cursor-pointer hover:border-sky-400 transition-all flex items-center justify-between gap-2 select-text"
+                              dir={isRTL ? 'rtl' : 'ltr'}
+                            >
+                              <span>{patient.pregnancyOrLactation}</span>
+                              <Pencil className="w-3.5 h-3.5 text-sky-500 shrink-0 opacity-75" />
+                            </div>
+                          ) : (
+                            <input
+                              type="text"
+                              autoFocus={isExistingFile && editingDemoField === 'pregnancyOrLactation'}
+                              value={patient.pregnancyOrLactation || ''}
+                              onChange={(e) => updateField('pregnancyOrLactation', e.target.value)}
+                              onBlur={() => setEditingDemoField(null)}
+                              placeholder={t.pregnancyOrLactationPlaceholder}
+                              className="w-full text-sm px-3.5 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
+                              dir={isRTL ? 'rtl' : 'ltr'}
+                            />
+                          )}
+                        </div>
+                      )}
 
-                {/* Phone */}
-                {activeFieldSettings.demographics.phone && (
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {t.phone}
-                    </label>
-                    {isExistingFile && (patient.phone || '').trim() && editingDemoField !== 'phone' ? (
-                      <div
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => setEditingDemoField('phone')}
-                        className="w-full text-sm px-3.5 py-2.5 bg-slate-50/80 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl font-mono text-slate-900 dark:text-white cursor-pointer hover:border-sky-400 transition-all flex items-center justify-between gap-2 select-text"
-                        dir="ltr"
-                      >
-                        <span>{patient.phone}</span>
-                        <Pencil className="w-3.5 h-3.5 text-sky-500 shrink-0 opacity-75" />
-                      </div>
-                    ) : (
-                      <input
-                        type="text"
-                        autoFocus={isExistingFile && editingDemoField === 'phone'}
-                        value={patient.phone || ''}
-                        onChange={(e) => updateField('phone', e.target.value)}
-                        onBlur={() => setEditingDemoField(null)}
-                        placeholder="05XXXXXXXX"
-                        className="w-full text-sm px-3.5 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all font-mono"
-                        dir="ltr"
-                      />
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
+                      {/* Exam Date (Auto) & Phone */}
+                      {(activeFieldSettings.demographics.examDate || activeFieldSettings.demographics.phone) && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {activeFieldSettings.demographics.examDate && (
+                            <div className={!activeFieldSettings.demographics.phone ? 'sm:col-span-2' : ''}>
+                              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {t.examDateAuto}
+                              </label>
+                              <div className="flex items-center gap-1.5 px-3 py-2.5 bg-sky-50/60 dark:bg-sky-950/40 border border-sky-100 dark:border-sky-900 rounded-xl text-xs text-sky-800 dark:text-sky-300 font-semibold">
+                                <Calendar className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+                                <span>{patient.examDate}</span>
+                              </div>
+                            </div>
+                          )}
+
+                          {activeFieldSettings.demographics.phone && (
+                            <div className={!activeFieldSettings.demographics.examDate ? 'sm:col-span-2' : ''}>
+                              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {t.phone}
+                              </label>
+                              {isExistingFile && (patient.phone || '').trim() && editingDemoField !== 'phone' ? (
+                                <div
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={() => setEditingDemoField('phone')}
+                                  className="w-full text-sm px-3.5 py-2.5 bg-slate-50/80 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl font-mono text-slate-900 dark:text-white cursor-pointer hover:border-sky-400 transition-all flex items-center justify-between gap-2 select-text"
+                                  dir="ltr"
+                                >
+                                  <span>{patient.phone}</span>
+                                  <Pencil className="w-3.5 h-3.5 text-sky-500 shrink-0 opacity-75" />
+                                </div>
+                              ) : (
+                                <input
+                                  type="text"
+                                  autoFocus={isExistingFile && editingDemoField === 'phone'}
+                                  value={patient.phone || ''}
+                                  onChange={(e) => updateField('phone', e.target.value)}
+                                  onBlur={() => setEditingDemoField(null)}
+                                  placeholder="05XXXXXXXX"
+                                  className="w-full text-sm px-3.5 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all font-mono"
+                                  dir="ltr"
+                                />
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* 2. Sequential Clinical Sub-Accordions (Habits, History, Symptoms [Orange], Exam, Investigations, Differential Diagnosis [Bold Purple], Waiting & Treatment) */}
             {(() => {

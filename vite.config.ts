@@ -1,12 +1,52 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
-import path from 'path';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { defineConfig, Plugin } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
-function appVersionPlugin(buildId: string): Plugin {
+function collectHashInputs(dir: string, excludedFiles: Set<string>, out: string[]): void {
+  if (!fs.existsSync(dir)) return;
+  const entries = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      collectHashInputs(fullPath, excludedFiles, out);
+    } else if (entry.isFile()) {
+      const rel = path.relative(__dirname, fullPath).replace(/\\/g, '/');
+      if (!excludedFiles.has(rel)) {
+        out.push(fullPath);
+      }
+    }
+  }
+}
+
+function computeUserBuildId(): string {
+  const hash = crypto.createHash('sha256');
+  const excluded = new Set(['src/components/ManagerDashboard.tsx']);
+  const files: string[] = [];
+
+  for (const rootFile of ['index.html', 'package.json']) {
+    const full = path.resolve(__dirname, rootFile);
+    if (fs.existsSync(full)) files.push(full);
+  }
+  collectHashInputs(path.resolve(__dirname, 'src'), excluded, files);
+
+  for (const filePath of files) {
+    const rel = path.relative(__dirname, filePath).replace(/\\/g, '/');
+    hash.update(rel);
+    hash.update('\0');
+    hash.update(fs.readFileSync(filePath));
+    hash.update('\0');
+  }
+  return hash.digest('hex').slice(0, 16);
+}
+
+function appVersionPlugin(buildId: string, userBuildId: string): Plugin {
   const payload = JSON.stringify({
     buildId,
+    userBuildId,
     updatedAt: new Date().toISOString(),
   });
 
@@ -31,15 +71,17 @@ function appVersionPlugin(buildId: string): Plugin {
 
 export default defineConfig(() => {
   const buildId = String(Date.now());
+  const userBuildId = computeUserBuildId();
 
   return {
     define: {
       __APP_BUILD_ID__: JSON.stringify(buildId),
+      __USER_BUILD_ID__: JSON.stringify(userBuildId),
     },
     plugins: [
       react(),
       tailwindcss(),
-      appVersionPlugin(buildId),
+      appVersionPlugin(buildId, userBuildId),
       VitePWA({
         registerType: 'prompt',
         includeAssets: ['apple-touch-icon.png', 'icon.svg', 'pwa-192x192.png', 'pwa-512x512.png'],

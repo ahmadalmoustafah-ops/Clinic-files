@@ -6,10 +6,6 @@ import {
   MessageSquareText,
   RefreshCw,
   LogOut,
-  Lock,
-  Mail,
-  Eye,
-  EyeOff,
   CheckCircle2,
   PauseCircle,
   Send,
@@ -25,6 +21,32 @@ import {
   Wifi,
   WifiOff,
 } from 'lucide-react';
+import {
+  onAuthStateChanged,
+  signInWithPopup,
+  signOut,
+  User,
+} from 'firebase/auth';
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  orderBy,
+  query,
+  serverTimestamp,
+  updateDoc,
+  onSnapshot,
+  writeBatch,
+} from 'firebase/firestore';
+import {
+  auth,
+  db,
+  googleProvider,
+  handleFirestoreError,
+  OperationType,
+  upsertUserProfile,
+} from '../firebase';
 import { useLanguage } from '../context/LanguageContext';
 import { AuthService } from '../services/authService';
 import { SubscriptionService } from '../services/subscriptionService';
@@ -32,6 +54,7 @@ import { StorageService } from '../services/storageService';
 
 interface ManagedSubscription {
   id: string;
+  ownerUid?: string;
   fullName: string;
   status: 'active' | 'suspended';
   adminMessage: string;
@@ -41,8 +64,6 @@ interface ManagedSubscription {
   lastSeenAt: string;
 }
 
-const MANAGER_TOKEN_KEY = 'easy_clinic_manager_token_v1';
-const MANAGER_SAVED_CRED_KEY = 'easy_clinic_manager_saved_cred_v1';
 const MANAGER_SUBS_CACHE_KEY = 'easy_clinic_manager_subs_cache_v1';
 const MANAGER_DELETED_IDS_KEY = 'easy_clinic_manager_deleted_ids_v1';
 const MANAGER_OWNER_EMAIL = 'ahmad.almoustafah@gmail.com';
@@ -69,7 +90,9 @@ function readDeletedIdsMap(): Record<string, number> {
 function saveDeletedIdsMap(map: Record<string, number>): void {
   try {
     localStorage.setItem(MANAGER_DELETED_IDS_KEY, JSON.stringify(map));
-  } catch {}
+  } catch {
+    // Ignore storage quota warnings
+  }
 }
 
 function readCachedSubscriptions(): ManagedSubscription[] {
@@ -103,7 +126,9 @@ function saveCachedSubscriptions(list: ManagedSubscription[]): void {
         updatedAt: new Date().toISOString(),
       })
     );
-  } catch {}
+  } catch {
+    // Ignore storage quota warnings
+  }
 }
 
 function computeCounts(list: ManagedSubscription[]) {
@@ -118,89 +143,56 @@ function computeCounts(list: ManagedSubscription[]) {
   };
 }
 
-interface SavedManagerCred {
-  email: string;
-  password: string;
-}
-
-function readStoredManagerToken(): string | null {
-  try {
-    return (
-      localStorage.getItem(MANAGER_TOKEN_KEY) ||
-      sessionStorage.getItem(MANAGER_TOKEN_KEY) ||
-      null
-    );
-  } catch {
-    return null;
+function timestampToIso(val: unknown, fallback?: unknown): string {
+  if (val && typeof (val as { toDate?: () => Date }).toDate === 'function') {
+    return (val as { toDate: () => Date }).toDate().toISOString();
   }
-}
-
-function saveStoredManagerToken(token: string): void {
-  try {
-    localStorage.setItem(MANAGER_TOKEN_KEY, token);
-  } catch {}
-  try {
-    sessionStorage.setItem(MANAGER_TOKEN_KEY, token);
-  } catch {}
-}
-
-function clearStoredManagerToken(): void {
-  try {
-    localStorage.removeItem(MANAGER_TOKEN_KEY);
-  } catch {}
-  try {
-    sessionStorage.removeItem(MANAGER_TOKEN_KEY);
-  } catch {}
-}
-
-function readSavedManagerCred(): SavedManagerCred | null {
-  try {
-    const raw = localStorage.getItem(MANAGER_SAVED_CRED_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<SavedManagerCred>;
-    if (
-      typeof parsed?.email === 'string' &&
-      typeof parsed?.password === 'string' &&
-      parsed.email.trim() &&
-      parsed.password.length >= 6
-    ) {
-      return { email: parsed.email.trim(), password: parsed.password };
-    }
-    return null;
-  } catch {
-    return null;
+  if (typeof val === 'string' && val.trim()) {
+    return val.trim();
   }
+  if (typeof fallback === 'string' && fallback.trim()) {
+    return fallback.trim();
+  }
+  return new Date().toISOString();
 }
 
-function saveSavedManagerCred(email: string, password: string): void {
-  try {
-    localStorage.setItem(
-      MANAGER_SAVED_CRED_KEY,
-      JSON.stringify({ email: email.trim(), password })
-    );
-  } catch {}
+function mapDocToManagedSubscription(
+  docId: string,
+  data: Record<string, unknown>
+): ManagedSubscription {
+  const updatedRaw =
+    typeof data.adminMessageUpdatedAt === 'string' ? data.adminMessageUpdatedAt.trim() : '';
+  return {
+    id: typeof data.id === 'string' && data.id ? data.id : docId,
+    ownerUid: typeof data.ownerUid === 'string' ? data.ownerUid : undefined,
+    fullName: typeof data.fullName === 'string' ? data.fullName : docId,
+    status: data.status === 'suspended' ? 'suspended' : 'active',
+    adminMessage: typeof data.adminMessage === 'string' ? data.adminMessage : '',
+    adminMessageUpdatedAt: updatedRaw || null,
+    filesCount:
+      typeof data.filesCount === 'number' && Number.isFinite(data.filesCount)
+        ? Math.max(0, Math.floor(data.filesCount))
+        : 0,
+    createdAt: timestampToIso(data.createdAt, data.clientCreatedAt),
+    lastSeenAt: timestampToIso(data.lastSeenAt, data.clientCreatedAt),
+  };
 }
 
-function clearSavedManagerCred(): void {
-  try {
-    localStorage.removeItem(MANAGER_SAVED_CRED_KEY);
-  } catch {}
+function isAuthorizedOwner(user: User | null): boolean {
+  return Boolean(
+    user &&
+      user.emailVerified &&
+      user.email &&
+      user.email.trim().toLowerCase() === MANAGER_OWNER_EMAIL
+  );
 }
 
 export const ManagerDashboard: React.FC = () => {
   const { isRTL, language, toggleLanguage } = useLanguage();
   const isAr = language === 'ar';
 
-  const [token, setToken] = useState<string | null>(readStoredManagerToken);
-  const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
-  const [email, setEmail] = useState(() => readSavedManagerCred()?.email || MANAGER_OWNER_EMAIL);
-  const [password, setPassword] = useState(() => readSavedManagerCred()?.password || '');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [rememberPassword, setRememberPassword] = useState(true);
-  const [autoLoggingIn, setAutoLoggingIn] = useState<boolean>(
-    () => !readStoredManagerToken() && Boolean(readSavedManagerCred())
-  );
-  const [showPassword, setShowPassword] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(auth.currentUser);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
 
@@ -214,6 +206,7 @@ export const ManagerDashboard: React.FC = () => {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteConfirmTarget, setDeleteConfirmTarget] = useState<ManagedSubscription | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   // Message modal state (single account)
@@ -235,59 +228,15 @@ export const ManagerDashboard: React.FC = () => {
   const longPressStartPosRef = React.useRef<{ x: number; y: number } | null>(null);
   const longPressTriggeredIdRef = React.useRef<string | null>(null);
 
+  const isOwnerSignedIn = isAuthorizedOwner(firebaseUser);
+
   const showToast = (msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 3500);
   };
 
-  const initAuthAndAutoLogin = useCallback(async () => {
-    let configured = true;
-    try {
-      const res = await fetch(`/api/manager/auth-status?_t=${Date.now()}`, {
-        cache: 'no-store',
-      });
-      if (res.ok) {
-        const data = (await res.json()) as { isConfigured?: boolean };
-        configured = Boolean(data.isConfigured);
-        setIsConfigured(configured);
-      } else {
-        setIsConfigured(true);
-      }
-    } catch {
-      setIsConfigured(true);
-    }
-
-    const saved = readSavedManagerCred();
-    if (saved && saved.email.toLowerCase() === MANAGER_OWNER_EMAIL) {
-      setAutoLoggingIn(true);
-      try {
-        const endpoint = configured ? '/api/manager/login' : '/api/manager/setup';
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: saved.email, password: saved.password }),
-        });
-        const data = (await res.json()) as { token?: string };
-        if (res.ok && data.token) {
-          saveStoredManagerToken(data.token);
-          setToken(data.token);
-          setAuthError(null);
-          return;
-        }
-        if (res.status === 401 || res.status === 403) {
-          clearSavedManagerCred();
-        }
-      } catch {
-        // Network issue; fall back cleanly to login view
-      } finally {
-        setAutoLoggingIn(false);
-      }
-    } else {
-      setAutoLoggingIn(false);
-    }
-  }, []);
-
   const syncLocalAccountsWithCounts = useCallback(async () => {
+    if (!auth.currentUser || !isAuthorizedOwner(auth.currentUser)) return;
     const deletedMap = readDeletedIdsMap();
     const summaries = AuthService.getAllAccountSummaries().filter((acc) => !deletedMap[acc.id]);
     if (!summaries.length) return;
@@ -300,258 +249,184 @@ export const ManagerDashboard: React.FC = () => {
     await SubscriptionService.syncAllAccounts(enriched);
   }, []);
 
-  const fetchSubscriptions = useCallback(async (activeToken: string) => {
+  const applySubscriptionList = useCallback((list: ManagedSubscription[]) => {
+    const deletedMap = readDeletedIdsMap();
+    let deletedMapChanged = false;
+    for (const s of list) {
+      const delAt = deletedMap[s.id];
+      if (delAt && s.lastSeenAt && new Date(s.lastSeenAt).getTime() > delAt + 5000) {
+        delete deletedMap[s.id];
+        deletedMapChanged = true;
+      }
+    }
+    if (deletedMapChanged) {
+      saveDeletedIdsMap(deletedMap);
+    }
+
+    const sortedList = [...list].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+    saveCachedSubscriptions(sortedList);
+    setSubscriptions(sortedList);
+    setSelectedIds((prev) => prev.filter((id) => sortedList.some((s) => s.id === id)));
+    setCounts(computeCounts(sortedList));
+    setHasLoadedOnce(true);
+  }, []);
+
+  const manualRefreshSubscriptions = useCallback(async () => {
+    if (!isOwnerSignedIn) return;
     setLoadingList(true);
     setFetchError(null);
-    const cached = readCachedSubscriptions();
-    const deletedMap = readDeletedIdsMap();
     try {
-      // Ensure any locally registered accounts in this browser sync their latest file counts (zero content)
       await syncLocalAccountsWithCounts();
-
-      const res = await fetch(`/api/manager/subscriptions?_t=${Date.now()}`, {
-        headers: { Authorization: `Bearer ${activeToken}` },
-        cache: 'no-store',
-      });
-
-      if (res.status === 401) {
-        clearStoredManagerToken();
-        setToken(null);
-        return;
+      const q = query(collection(db, 'subscriptions'), orderBy('createdAt', 'desc'));
+      let snap;
+      try {
+        snap = await getDocs(q);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.LIST, 'subscriptions');
       }
-
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-
-      let data = (await res.json()) as {
-        totalCount: number;
-        activeCount: number;
-        suspendedCount: number;
-        totalFilesCount?: number;
-        subscriptions: ManagedSubscription[];
-      };
-      let serverList = data.subscriptions || [];
-
-      // If an account seen on server had active sign-in strictly AFTER deletion, un-block it
-      let deletedMapChanged = false;
-      for (const s of serverList) {
-        const delAt = deletedMap[s.id];
-        if (delAt && s.lastSeenAt && new Date(s.lastSeenAt).getTime() > delAt + 5000) {
-          delete deletedMap[s.id];
-          deletedMapChanged = true;
-        }
-      }
-      if (deletedMapChanged) {
-        saveDeletedIdsMap(deletedMap);
-      }
-
-      // Restore any cached offline accounts missing from server (excluding deliberately deleted ones)
-      const missingOnServer = cached.filter(
-        (c) => !deletedMap[c.id] && !serverList.some((s) => s.id === c.id)
+      const list = snap.docs.map((d) =>
+        mapDocToManagedSubscription(d.id, d.data() as Record<string, unknown>)
       );
-      if (missingOnServer.length > 0) {
-        try {
-          const restoreRes = await fetch('/api/manager/subscriptions/restore', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${activeToken}`,
-            },
-            body: JSON.stringify({ subscriptions: missingOnServer }),
-          });
-          if (restoreRes.ok) {
-            const refreshedRes = await fetch(`/api/manager/subscriptions?_t=${Date.now()}`, {
-              headers: { Authorization: `Bearer ${activeToken}` },
-              cache: 'no-store',
-            });
-            if (refreshedRes.ok) {
-              data = (await refreshedRes.json()) as typeof data;
-              serverList = data.subscriptions || [];
-            } else {
-              serverList = [...serverList, ...missingOnServer];
-            }
-          } else {
-            serverList = [...serverList, ...missingOnServer];
-          }
-        } catch {
-          serverList = [...serverList, ...missingOnServer];
-        }
-      }
-
-      const sortedList = [...serverList].sort(
-        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      );
-      saveCachedSubscriptions(sortedList);
-      setSubscriptions(sortedList);
-      setSelectedIds((prev) => prev.filter((id) => sortedList.some((s) => s.id === id)));
-      setCounts(computeCounts(sortedList));
-      setHasLoadedOnce(true);
+      applySubscriptionList(list);
     } catch {
+      const cached = readCachedSubscriptions();
       if (cached.length > 0) {
         setSubscriptions(cached);
         setCounts(computeCounts(cached));
         setHasLoadedOnce(true);
         setFetchError(
           isAr
-            ? 'تعذر الاتصال بالخادم حالياً — يتم الإبقاء على عرض جميع حسابات الاشتراك المحفوظة.'
-            : 'Unable to reach server right now — keeping all cached subscription accounts listed.'
+            ? 'تعذر الاتصال بقاعدة البيانات حالياً — يتم عرض حسابات الاشتراك المحفوظة محلياً.'
+            : 'Unable to reach Cloud Firestore right now — displaying cached subscription accounts.'
         );
       } else {
         setFetchError(
           isAr
-            ? 'تعذر تحميل قائمة المشتركين من الخادم حالياً. يرجى الضغط على تحديث لإعادة المحاولة.'
-            : 'Failed to load subscriber accounts from server. Tap refresh to retry.'
+            ? 'تعذر تحميل قائمة المشتركين حالياً. يرجى الضغط على تحديث لإعادة المحاولة.'
+            : 'Failed to load subscriber accounts. Tap refresh to retry.'
         );
       }
     } finally {
       setLoadingList(false);
     }
-  }, [isAr, syncLocalAccountsWithCounts]);
+  }, [isOwnerSignedIn, isAr, syncLocalAccountsWithCounts, applySubscriptionList]);
 
   useEffect(() => {
     document.title = 'Easy clinic manager';
-    syncLocalAccountsWithCounts();
-  }, [syncLocalAccountsWithCounts]);
+  }, []);
 
   useEffect(() => {
-    if (!token) {
-      initAuthAndAutoLogin();
-    } else {
-      const cached = readCachedSubscriptions();
-      if (cached.length > 0) {
-        setSubscriptions((prev) => (prev.length > 0 ? prev : cached));
-        setCounts((prev) => (prev.total > 0 ? prev : computeCounts(cached)));
-        setHasLoadedOnce(true);
-      }
-      fetchSubscriptions(token);
-      const timer = window.setInterval(() => fetchSubscriptions(token), 15000);
-      const onFocusOrVisible = () => {
-        if (document.visibilityState === 'visible') {
-          fetchSubscriptions(token);
-        }
-      };
-      window.addEventListener('focus', onFocusOrVisible);
-      window.addEventListener('online', onFocusOrVisible);
-      document.addEventListener('visibilitychange', onFocusOrVisible);
-      return () => {
-        clearInterval(timer);
-        window.removeEventListener('focus', onFocusOrVisible);
-        window.removeEventListener('online', onFocusOrVisible);
-        document.removeEventListener('visibilitychange', onFocusOrVisible);
-      };
-    }
-  }, [token, initAuthAndAutoLogin, fetchSubscriptions]);
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user);
+      setAuthReady(true);
 
-  const handleAuthSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (authLoading) return;
-    setAuthError(null);
-
-    if (isConfigured === false) {
-      if (password.length < 6) {
+      if (user && !isAuthorizedOwner(user)) {
         setAuthError(
           isAr
-            ? 'كلمة سر المدير يجب أن تتكون من 6 أحرف على الأقل.'
-            : 'Manager password must be at least 6 characters.'
+            ? `تم تسجيل الدخول بالحساب (${user.email || 'غير معروف'})، ولكن هذه البوابة مخصصة حصراً لحساب المالك المعتمد (${MANAGER_OWNER_EMAIL}).`
+            : `Signed in as ${user.email || 'unknown'}, but access is restricted exclusively to ${MANAGER_OWNER_EMAIL}.`
         );
-        return;
-      }
-      if (password !== confirmPassword) {
-        setAuthError(isAr ? 'كلمتا السر غير متطابقتين.' : 'Passwords do not match.');
-        return;
-      }
-
-      setAuthLoading(true);
-      try {
-        const res = await fetch('/api/manager/setup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password }),
+      } else if (user && isAuthorizedOwner(user)) {
+        setAuthError(null);
+        void upsertUserProfile(user).catch((err) => {
+          console.error('Owner profile sync error:', err);
         });
-        const data = (await res.json()) as { token?: string; error?: string };
-        if (!res.ok || !data.token) {
-          setAuthError(data.error || (isAr ? 'فشل إعداد كلمة السر' : 'Setup failed'));
-          return;
-        }
-        saveStoredManagerToken(data.token);
-        if (rememberPassword) {
-          saveSavedManagerCred(email, password);
-        } else {
-          clearSavedManagerCred();
-        }
-        setToken(data.token);
-        setPassword('');
-        setConfirmPassword('');
-      } finally {
-        setAuthLoading(false);
       }
-      return;
+    });
+    return () => unsubAuth();
+  }, [isAr]);
+
+  useEffect(() => {
+    if (!isOwnerSignedIn) return;
+
+    const cached = readCachedSubscriptions();
+    if (cached.length > 0) {
+      setSubscriptions((prev) => (prev.length > 0 ? prev : cached));
+      setCounts((prev) => (prev.total > 0 ? prev : computeCounts(cached)));
+      setHasLoadedOnce(true);
     }
 
+    setLoadingList(true);
+    setFetchError(null);
+    void syncLocalAccountsWithCounts().catch((err) => {
+      console.error('Local account sync warning:', err);
+    });
+
+    const subsQuery = query(collection(db, 'subscriptions'), orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(
+      subsQuery,
+      (snapshot) => {
+        const list = snapshot.docs.map((d) =>
+          mapDocToManagedSubscription(d.id, d.data() as Record<string, unknown>)
+        );
+        applySubscriptionList(list);
+        setFetchError(null);
+        setLoadingList(false);
+      },
+      (error) => {
+        setLoadingList(false);
+        handleFirestoreError(error, OperationType.LIST, 'subscriptions');
+      }
+    );
+
+    return () => unsubscribe();
+  }, [isOwnerSignedIn, syncLocalAccountsWithCounts, applySubscriptionList]);
+
+  const handleGoogleSignIn = async () => {
+    if (authLoading) return;
     setAuthLoading(true);
+    setAuthError(null);
     try {
-      const res = await fetch('/api/manager/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-      const data = (await res.json()) as { token?: string; error?: string };
-      if (!res.ok || !data.token) {
+      const cred = await signInWithPopup(auth, googleProvider);
+      if (!isAuthorizedOwner(cred.user)) {
         setAuthError(
           isAr
-            ? 'بيانات الدخول غير صحيحة. هذا الرابط مخصص لصاحب التطبيق فقط.'
-            : data.error || 'Invalid owner credentials.'
+            ? `هذا الرابط مخصص حصراً لحساب المالك (${MANAGER_OWNER_EMAIL}). يرجى تسجيل الدخول بالحساب الصحيح.`
+            : `Access restricted exclusively to ${MANAGER_OWNER_EMAIL}. Please sign in with the authorized owner Google account.`
         );
+        await signOut(auth);
         return;
       }
-      saveStoredManagerToken(data.token);
-      if (rememberPassword) {
-        saveSavedManagerCred(email, password);
-      } else {
-        clearSavedManagerCred();
+      await upsertUserProfile(cred.user);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (!msg.includes('popup-closed-by-user')) {
+        setAuthError(
+          isAr
+            ? 'تعذر إتمام تسجيل الدخول عبر Google. يرجى المحاولة مرة أخرى.'
+            : 'Unable to complete Google Sign-In. Please try again.'
+        );
       }
-      setToken(data.token);
-      setPassword('');
     } finally {
       setAuthLoading(false);
     }
   };
 
   const handleToggleStatus = async (sub: ManagedSubscription) => {
-    if (!token || togglingId) return;
+    if (!isOwnerSignedIn || togglingId) return;
     const nextStatus: 'active' | 'suspended' =
       sub.status === 'active' ? 'suspended' : 'active';
 
     setTogglingId(sub.id);
+    const docPath = `subscriptions/${sub.id}`;
     try {
-      const res = await fetch(`/api/manager/subscriptions/${encodeURIComponent(sub.id)}/status`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ status: nextStatus }),
+      await updateDoc(doc(db, 'subscriptions', sub.id), {
+        status: nextStatus,
+        updatedAt: serverTimestamp(),
       });
-
-      if (res.status === 401) {
-        clearStoredManagerToken();
-        setToken(null);
-        return;
-      }
-
-      if (res.ok) {
-        await fetchSubscriptions(token);
-        showToast(
-          nextStatus === 'suspended'
-            ? isAr
-              ? `تم التعطيل المؤقت لحساب (${sub.fullName}) — مُنع من إنشاء ملفات جديدة`
-              : `Temporarily suspended (${sub.fullName})`
-            : isAr
-            ? `تم تفعيل حساب (${sub.fullName}) وعاد للعمل بشكل كامل`
-            : `Activated (${sub.fullName}) for full access`
-        );
-      }
+      showToast(
+        nextStatus === 'suspended'
+          ? isAr
+            ? `تم التعطيل المؤقت لحساب (${sub.fullName}) — مُنع من إنشاء ملفات جديدة`
+            : `Temporarily suspended (${sub.fullName})`
+          : isAr
+          ? `تم تفعيل حساب (${sub.fullName}) وعاد للعمل بشكل كامل`
+          : `Activated (${sub.fullName}) for full access`
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, docPath);
     } finally {
       setTogglingId(null);
     }
@@ -565,9 +440,9 @@ export const ManagerDashboard: React.FC = () => {
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token || !messageTarget || sendingMessage) return;
+    if (!isOwnerSignedIn || !messageTarget || sendingMessage) return;
 
-    const trimmed = messageText.trim();
+    const trimmed = messageText.trim().slice(0, 2000);
     if (!trimmed) {
       setMessageError(
         isAr ? 'يرجى كتابة نص الرسالة قبل الإرسال.' : 'Please enter a message before sending.'
@@ -577,100 +452,69 @@ export const ManagerDashboard: React.FC = () => {
 
     setSendingMessage(true);
     setMessageError(null);
+    const docPath = `subscriptions/${messageTarget.id}`;
     try {
-      const res = await fetch(
-        `/api/manager/subscriptions/${encodeURIComponent(messageTarget.id)}/message`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ message: trimmed }),
-        }
-      );
-
-      if (res.status === 401) {
-        clearStoredManagerToken();
-        setToken(null);
-        return;
-      }
-
-      if (!res.ok) {
-        const errData = (await res.json()) as { error?: string };
-        setMessageError(errData.error || 'Failed to send message');
-        return;
-      }
-
-      await fetchSubscriptions(token);
+      await updateDoc(doc(db, 'subscriptions', messageTarget.id), {
+        adminMessage: trimmed,
+        adminMessageUpdatedAt: new Date().toISOString(),
+        updatedAt: serverTimestamp(),
+      });
       showToast(
         isAr
           ? `تم إرسال الرسالة إلى (${messageTarget.fullName}) وستظهر في صفحته الرئيسية`
           : `Message sent to ${messageTarget.fullName}`
       );
       setMessageTarget(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, docPath);
     } finally {
       setSendingMessage(false);
     }
   };
 
   const handleClearMessage = async () => {
-    if (!token || !messageTarget || sendingMessage) return;
+    if (!isOwnerSignedIn || !messageTarget || sendingMessage) return;
     setSendingMessage(true);
+    const docPath = `subscriptions/${messageTarget.id}`;
     try {
-      const res = await fetch(
-        `/api/manager/subscriptions/${encodeURIComponent(messageTarget.id)}/message`,
-        {
-          method: 'DELETE',
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
-      if (res.ok) {
-        await fetchSubscriptions(token);
-        showToast(isAr ? 'تمت إزالة الرسالة من حساب العميل' : 'Client message cleared');
-        setMessageTarget(null);
-      }
+      await updateDoc(doc(db, 'subscriptions', messageTarget.id), {
+        adminMessage: '',
+        adminMessageUpdatedAt: '',
+        updatedAt: serverTimestamp(),
+      });
+      showToast(isAr ? 'تمت إزالة الرسالة من حساب العميل' : 'Client message cleared');
+      setMessageTarget(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, docPath);
     } finally {
       setSendingMessage(false);
     }
   };
 
-  const handleManagerLogout = () => {
-    clearStoredManagerToken();
-    clearSavedManagerCred();
-    setToken(null);
-    setPassword('');
-    setConfirmPassword('');
+  const handleManagerLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch {
+      // Ignore signOut errors
+    }
     setSubscriptions([]);
     setHasLoadedOnce(false);
+    setAuthError(null);
   };
 
-  const handleDeleteAccount = async (sub: ManagedSubscription) => {
-    if (!token || deletingId) return;
-    const confirmed = window.confirm(
-      isAr
-        ? `هل أنت متأكد من حذف حساب (${sub.fullName}) من القائمة المحفوظة؟`
-        : `Delete account (${sub.fullName}) from the saved subscriptions list?`
-    );
-    if (!confirmed) return;
+  const handleDeleteAccount = (sub: ManagedSubscription) => {
+    if (!isOwnerSignedIn || deletingId) return;
+    setDeleteConfirmTarget(sub);
+  };
+
+  const handleConfirmDeleteAccount = async () => {
+    const sub = deleteConfirmTarget;
+    if (!isOwnerSignedIn || !sub || deletingId) return;
 
     setDeletingId(sub.id);
+    const docPath = `subscriptions/${sub.id}`;
     try {
-      const res = await fetch(`/api/manager/subscriptions/${encodeURIComponent(sub.id)}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      if (res.status === 401) {
-        clearStoredManagerToken();
-        setToken(null);
-        return;
-      }
-
-      if (!res.ok && res.status !== 404) {
-        showToast(isAr ? 'تعذر حذف الحساب حالياً، حاول مرة أخرى.' : 'Failed to delete account.');
-        return;
-      }
+      await deleteDoc(doc(db, 'subscriptions', sub.id));
 
       const deletedMap = readDeletedIdsMap();
       deletedMap[sub.id] = Date.now();
@@ -683,9 +527,12 @@ export const ManagerDashboard: React.FC = () => {
         return next;
       });
       setSelectedIds((prev) => prev.filter((item) => item !== sub.id));
+      setDeleteConfirmTarget(null);
       showToast(
         isAr ? `تم حذف حساب (${sub.fullName}) من القائمة المحفوظة` : `Deleted (${sub.fullName})`
       );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, docPath);
     } finally {
       setDeletingId(null);
     }
@@ -754,7 +601,8 @@ export const ManagerDashboard: React.FC = () => {
 
   const openBulkMessageModal = (preferredScope?: 'all' | 'selected') => {
     const scope =
-      preferredScope || (selectedIds.length > 0 && selectedIds.length < subscriptions.length ? 'selected' : 'all');
+      preferredScope ||
+      (selectedIds.length > 0 && selectedIds.length < subscriptions.length ? 'selected' : 'all');
     setBulkScope(scope);
     setBulkMessageText('');
     setBulkMessageError(null);
@@ -763,9 +611,9 @@ export const ManagerDashboard: React.FC = () => {
 
   const handleSendBulkMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token || sendingBulk) return;
+    if (!isOwnerSignedIn || sendingBulk) return;
 
-    const trimmed = bulkMessageText.trim();
+    const trimmed = bulkMessageText.trim().slice(0, 2000);
     if (!trimmed) {
       setBulkMessageError(
         isAr ? 'يرجى كتابة نص الرسالة الجماعية قبل الإرسال.' : 'Please enter a message before sending.'
@@ -773,7 +621,12 @@ export const ManagerDashboard: React.FC = () => {
       return;
     }
 
-    if (bulkScope === 'selected' && selectedIds.length === 0) {
+    const targetList =
+      bulkScope === 'all'
+        ? subscriptions
+        : subscriptions.filter((s) => selectedIds.includes(s.id));
+
+    if (targetList.length === 0) {
       setBulkMessageError(
         isAr
           ? 'يرجى تحديد حساب اشتراك واحد على الأقل أو اختيار الإرسال لجميع الحسابات.'
@@ -784,40 +637,28 @@ export const ManagerDashboard: React.FC = () => {
 
     setSendingBulk(true);
     setBulkMessageError(null);
+    const nowIso = new Date().toISOString();
     try {
-      const res = await fetch('/api/manager/subscriptions/bulk-message', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          sendToAll: bulkScope === 'all',
-          subscriptionIds: bulkScope === 'selected' ? selectedIds : undefined,
-          message: trimmed,
-        }),
-      });
-
-      if (res.status === 401) {
-        clearStoredManagerToken();
-        setToken(null);
-        return;
+      for (let i = 0; i < targetList.length; i += 450) {
+        const chunk = targetList.slice(i, i + 450);
+        const batch = writeBatch(db);
+        for (const sub of chunk) {
+          batch.update(doc(db, 'subscriptions', sub.id), {
+            adminMessage: trimmed,
+            adminMessageUpdatedAt: nowIso,
+            updatedAt: serverTimestamp(),
+          });
+        }
+        await batch.commit();
       }
-
-      if (!res.ok) {
-        const errData = (await res.json()) as { error?: string };
-        setBulkMessageError(errData.error || 'Failed to send bulk message');
-        return;
-      }
-
-      const result = (await res.json()) as { updatedCount?: number };
-      await fetchSubscriptions(token);
       setIsBulkModalOpen(false);
       showToast(
         isAr
-          ? `تم إرسال الرسالة الجماعية إلى (${result.updatedCount ?? 0}) حساب وستظهر في صفحاتهم الرئيسية`
-          : `Broadcast message sent to ${result.updatedCount ?? 0} account(s)`
+          ? `تم إرسال الرسالة الجماعية إلى (${targetList.length}) حساب وستظهر في صفحاتهم الرئيسية`
+          : `Broadcast message sent to ${targetList.length} account(s)`
       );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'subscriptions');
     } finally {
       setSendingBulk(false);
     }
@@ -826,8 +667,8 @@ export const ManagerDashboard: React.FC = () => {
   const trimmedLen = messageText.trim().length;
   const bulkTrimmedLen = bulkMessageText.trim().length;
 
-  // --- Seamless Auto-Login Splash while verifying remembered credentials ---
-  if (!token && autoLoggingIn) {
+  // --- Initial Firebase Auth Check ---
+  if (!authReady) {
     return (
       <div
         className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4"
@@ -839,15 +680,15 @@ export const ManagerDashboard: React.FC = () => {
           </div>
           <h1 className="text-base font-extrabold text-white">Easy clinic manager</h1>
           <p className="text-xs text-slate-300">
-            {isAr ? 'جاري الدخول التلقائي بكلمة السر المحفوظة...' : 'Signing in automatically with saved credentials...'}
+            {isAr ? 'جاري التحقق من جلسة المالك السحابية...' : 'Verifying cloud owner session...'}
           </p>
         </div>
       </div>
     );
   }
 
-  // --- Manager Login / First-Time Owner Setup View ---
-  if (!token) {
+  // --- Manager Google Sign-In Gate ---
+  if (!isOwnerSignedIn) {
     return (
       <div
         className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4"
@@ -870,17 +711,13 @@ export const ManagerDashboard: React.FC = () => {
               Easy clinic manager
             </h1>
             <p className="text-xs text-sky-200 mt-1">
-              {isConfigured === false
-                ? isAr
-                  ? 'إعداد كلمة سر المدير الوحيد لإدارة الاشتراكات'
-                  : 'First-time Owner Password Setup'
-                : isAr
-                ? 'بوابة المالك الخاصة لإدارة حسابات الاشتراك فقط'
-                : 'Owner-Only Subscription Management Portal'}
+              {isAr
+                ? 'بوابة المالك السحابية (Cloud Firestore) لإدارة حسابات الاشتراك فقط'
+                : 'Cloud Firestore Owner-Only Subscription Management Portal'}
             </p>
           </div>
 
-          <form onSubmit={handleAuthSubmit} className="p-6 space-y-4">
+          <div className="p-6 space-y-4">
             {authError && (
               <div className="bg-rose-950/60 border border-rose-800 text-rose-200 rounded-2xl p-3 text-xs font-semibold flex items-start gap-2">
                 <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
@@ -888,112 +725,66 @@ export const ManagerDashboard: React.FC = () => {
               </div>
             )}
 
-            <div>
-              <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                {isAr ? 'البريد الإلكتروني المعتمد للمالك' : 'Authorized Owner Email'}
-              </label>
-              <div className="relative">
-                <Mail className="w-4 h-4 text-slate-400 absolute top-1/2 -translate-y-1/2 left-3.5" />
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  dir="ltr"
-                  className="w-full py-2.5 pl-10 pr-3.5 bg-slate-950 border border-slate-700 rounded-2xl text-sm text-white font-mono focus:outline-none focus:border-sky-500"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                {isConfigured === false
-                  ? isAr
-                    ? 'إنشاء كلمة سر المدير'
-                    : 'Create Manager Password'
-                  : isAr
-                  ? 'كلمة سر المدير'
-                  : 'Manager Password'}
-              </label>
-              <div className="relative">
-                <Lock className="w-4 h-4 text-slate-400 absolute top-1/2 -translate-y-1/2 left-3.5" />
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  minLength={6}
-                  dir="ltr"
-                  className="w-full py-2.5 pl-10 pr-10 bg-slate-950 border border-slate-700 rounded-2xl text-sm text-white focus:outline-none focus:border-sky-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((prev) => !prev)}
-                  className="absolute top-1/2 -translate-y-1/2 right-3 text-slate-400 hover:text-white cursor-pointer"
-                >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
-
-            {isConfigured === false && (
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                  {isAr ? 'تأكيد كلمة السر' : 'Confirm Password'}
-                </label>
-                <div className="relative">
-                  <Lock className="w-4 h-4 text-slate-400 absolute top-1/2 -translate-y-1/2 left-3.5" />
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    required
-                    minLength={6}
-                    dir="ltr"
-                    className="w-full py-2.5 pl-10 pr-3.5 bg-slate-950 border border-slate-700 rounded-2xl text-sm text-white focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-              </div>
-            )}
-
-            <label className="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer select-none pt-0.5">
-              <input
-                type="checkbox"
-                checked={rememberPassword}
-                onChange={(e) => setRememberPassword(e.target.checked)}
-                className="w-4 h-4 rounded accent-sky-500 cursor-pointer"
-              />
-              <span>
-                {isAr
-                  ? 'حفظ كلمة السر على هذا الجهاز للدخول التلقائي مستقبلاً'
-                  : 'Keep password on this device for automatic sign-in'}
+            <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-3.5 text-center space-y-1">
+              <span className="text-[11px] text-slate-400 block font-semibold">
+                {isAr ? 'حساب المالك المعتمد للدخول:' : 'Authorized Owner Google Account:'}
               </span>
-            </label>
+              <span className="text-xs font-mono font-bold text-sky-300" dir="ltr">
+                {MANAGER_OWNER_EMAIL}
+              </span>
+            </div>
 
             <button
-              type="submit"
-              disabled={authLoading || isConfigured === null}
-              className="w-full py-3 bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white rounded-2xl text-xs font-extrabold transition-colors cursor-pointer shadow-lg shadow-sky-600/20"
+              type="button"
+              onClick={handleGoogleSignIn}
+              disabled={authLoading}
+              className="w-full py-3 px-4 bg-white hover:bg-slate-100 disabled:opacity-60 text-slate-800 border border-slate-300 rounded-2xl text-xs font-extrabold transition-colors cursor-pointer shadow-lg flex items-center justify-center gap-3"
             >
-              {authLoading
-                ? isAr
-                  ? 'جاري التحقق...'
-                  : 'Verifying...'
-                : isConfigured === false
-                ? isAr
-                  ? 'حفظ كلمة السر ودخول Easy clinic manager'
-                  : 'Set Password & Enter Manager'
-                : isAr
-                ? 'دخول Easy clinic manager'
-                : 'Sign In to Easy clinic manager'}
+              <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="#4285F4"
+                  d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
+                />
+                <path
+                  fill="#34A853"
+                  d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z"
+                />
+                <path
+                  fill="#FBBC05"
+                  d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"
+                />
+                <path
+                  fill="#EA4335"
+                  d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"
+                />
+              </svg>
+              <span>
+                {authLoading
+                  ? isAr
+                    ? 'جاري تسجيل الدخول...'
+                    : 'Signing in...'
+                  : isAr
+                  ? 'تسجيل الدخول بحساب Google'
+                  : 'Sign in with Google'}
+              </span>
             </button>
+
+            {firebaseUser && (
+              <button
+                type="button"
+                onClick={handleManagerLogout}
+                className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-2xl text-xs font-bold transition-colors cursor-pointer"
+              >
+                {isAr ? 'تسجيل الخروج من الحساب الحالي' : 'Sign out current account'}
+              </button>
+            )}
 
             <p className="text-[11px] text-slate-400 text-center leading-relaxed pt-2 border-t border-slate-800">
               {isAr
-                ? 'ملاحظة الخصوصية: تعرض هذه اللوحة أسماء وعدد حسابات الاشتراك فقط دون أي وصول لملفات أو بيانات المرضى.'
-                : 'Privacy guarantee: Only subscription account names and counts are visible. Patient files remain strictly inaccessible.'}
+                ? 'ملاحظة الخصوصية: تعرض هذه اللوحة أسماء وعدد حسابات الاشتراك فقط عبر Cloud Firestore دون أي وصول لملفات أو بيانات المرضى.'
+                : 'Privacy guarantee: Only subscription account names and counts are synced to Cloud Firestore. Patient files remain strictly local.'}
             </p>
-          </form>
+          </div>
         </div>
       </div>
     );
@@ -1025,15 +816,15 @@ export const ManagerDashboard: React.FC = () => {
               </h1>
               <p className="text-[11px] text-slate-300">
                 {isAr
-                  ? 'إدارة حسابات الاشتراك · خصوصية ملفات المرضى محمية بالكامل'
-                  : 'Subscription Accounts Manager · Zero Access to Patient Files'}
+                  ? 'إدارة حسابات الاشتراك (Cloud Firestore) · خصوصية ملفات المرضى محمية بالكامل'
+                  : 'Cloud Firestore Subscription Manager · Zero Access to Patient Files'}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => fetchSubscriptions(token)}
+              onClick={() => void manualRefreshSubscriptions()}
               disabled={loadingList}
               className="p-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-200 transition-colors cursor-pointer"
               title={isAr ? 'تحديث القائمة' : 'Refresh'}
@@ -1049,7 +840,7 @@ export const ManagerDashboard: React.FC = () => {
             </button>
 
             <button
-              onClick={handleManagerLogout}
+              onClick={() => void handleManagerLogout()}
               className="inline-flex items-center gap-1.5 px-3 py-2 bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 rounded-xl text-xs font-bold transition-colors cursor-pointer"
             >
               <LogOut className="w-3.5 h-3.5" />
@@ -1065,8 +856,8 @@ export const ManagerDashboard: React.FC = () => {
           <ShieldCheck className="w-5 h-5 text-sky-600 dark:text-sky-400 shrink-0" />
           <span>
             {isAr
-              ? 'هذه الصفحة مستقلة وتعرض أسماء وعدد حسابات الاشتراك وإجمالي عدد الملفات المدخلة فقط لتقييم التفاعل، مع منع تام للاطلاع على محتوى أي ملفات أو بيانات مرضى.'
-              : 'Strict privacy isolation: Only subscriber names, account count, and total entered file counts are displayed to measure engagement. Patient record contents remain 100% private and inaccessible.'}
+              ? 'هذه الصفحة مستقلة وتعمل عبر Cloud Firestore لعرض أسماء وعدد حسابات الاشتراك وإجمالي عدد الملفات المدخلة فقط لتقييم التفاعل، مع منع تام للاطلاع على محتوى أي ملفات أو بيانات مرضى.'
+              : 'Strict privacy isolation: Powered by Cloud Firestore storing only subscriber names, account count, and total entered file counts. Patient record contents stay 100% local and inaccessible.'}
           </span>
         </div>
 
@@ -1204,7 +995,7 @@ export const ManagerDashboard: React.FC = () => {
               </div>
               <button
                 type="button"
-                onClick={() => fetchSubscriptions(token)}
+                onClick={() => void manualRefreshSubscriptions()}
                 className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-[11px] font-bold shrink-0 cursor-pointer"
               >
                 {isAr ? 'إعادة المحاولة' : 'Retry'}
@@ -1224,8 +1015,8 @@ export const ManagerDashboard: React.FC = () => {
               <Users className="w-10 h-10 mx-auto text-slate-300 dark:text-slate-700 stroke-[1.2]" />
               <p className="font-semibold">
                 {isAr
-                  ? 'لا توجد حسابات اشتراك مسجلة حتى الآن'
-                  : 'No user subscription accounts registered yet'}
+                  ? 'لا توجد حسابات اشتراك مسجلة في السحابة حتى الآن'
+                  : 'No user subscription accounts synced to Firestore yet'}
               </p>
             </div>
           ) : (
@@ -1403,7 +1194,7 @@ export const ManagerDashboard: React.FC = () => {
                       {/* Icon 1: Green/Red Subscription Status Toggle */}
                       <button
                         type="button"
-                        onClick={() => handleToggleStatus(sub)}
+                        onClick={() => void handleToggleStatus(sub)}
                         disabled={togglingId === sub.id}
                         className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs font-extrabold shadow-xs transition-all cursor-pointer active:scale-95 disabled:opacity-50 ${
                           isActive
@@ -1467,7 +1258,7 @@ export const ManagerDashboard: React.FC = () => {
         </div>
       </main>
 
-      {/* Send Message to Client Modal (>= 50 chars) */}
+      {/* Send Message to Client Modal */}
       {messageTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
           <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
@@ -1528,7 +1319,7 @@ export const ManagerDashboard: React.FC = () => {
                 {messageTarget.adminMessage ? (
                   <button
                     type="button"
-                    onClick={handleClearMessage}
+                    onClick={() => void handleClearMessage()}
                     disabled={sendingMessage}
                     className="inline-flex items-center gap-1 px-3 py-2 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-xl text-xs font-bold cursor-pointer"
                   >
@@ -1561,6 +1352,7 @@ export const ManagerDashboard: React.FC = () => {
           </div>
         </div>
       )}
+
       {/* Bulk / Broadcast Message Modal */}
       {isBulkModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
@@ -1732,6 +1524,65 @@ export const ManagerDashboard: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Subscription Account Confirmation Modal */}
+      {deleteConfirmTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="w-full max-w-sm bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="bg-rose-600 text-white px-5 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <Trash2 className="w-5 h-5 shrink-0" />
+                <h3 className="text-sm font-extrabold">
+                  {isAr ? 'تأكيد الحذف؟' : 'Confirm deletion?'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => !deletingId && setDeleteConfirmTarget(null)}
+                className="p-1.5 hover:bg-black/15 rounded-xl cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed font-semibold">
+                {isAr
+                  ? `هل أنت متأكد من حذف حساب (${deleteConfirmTarget.fullName}) من القائمة المحفوظة؟`
+                  : `Are you sure you want to delete (${deleteConfirmTarget.fullName}) from the saved subscriptions list?`}
+              </p>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirmTarget(null)}
+                  disabled={Boolean(deletingId)}
+                  className="px-4 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold cursor-pointer disabled:opacity-50"
+                >
+                  {isAr ? 'إلغاء' : 'Cancel'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleConfirmDeleteAccount()}
+                  disabled={Boolean(deletingId)}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-extrabold cursor-pointer shadow-xs"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>
+                    {deletingId
+                      ? isAr
+                        ? 'جاري الحذف...'
+                        : 'Deleting...'
+                      : isAr
+                      ? 'تأكيد الحذف'
+                      : 'Delete'}
+                  </span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

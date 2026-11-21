@@ -1,0 +1,167 @@
+{
+  "entities": {
+    "Subscription": {
+      "title": "Subscription",
+      "description": "Clinic subscription metadata and admin status/messaging record (zero patient PII)",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique subscription account identifier",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "Firebase Auth UID that owns/syncs this subscription record",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "fullName": {
+          "type": "string",
+          "description": "Doctor or clinic display name",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "status": {
+          "type": "string",
+          "description": "Subscription access status controlled exclusively by admin",
+          "enum": ["active", "suspended"],
+          "maxLength": 20
+        },
+        "adminMessage": {
+          "type": "string",
+          "description": "Notice message displayed on the subscriber home screen",
+          "maxLength": 2000
+        },
+        "adminMessageUpdatedAt": {
+          "type": "string",
+          "description": "ISO timestamp string when admin message was last set, or empty string",
+          "maxLength": 64
+        },
+        "filesCount": {
+          "type": "integer",
+          "description": "Aggregate count of entered patient records without any patient content"
+        },
+        "clientCreatedAt": {
+          "type": "string",
+          "description": "Original account creation timestamp ISO string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp"
+        },
+        "lastSeenAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of latest client sync"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of latest modification"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "fullName",
+        "status",
+        "adminMessage",
+        "adminMessageUpdatedAt",
+        "filesCount",
+        "clientCreatedAt",
+        "createdAt",
+        "lastSeenAt",
+        "updatedAt"
+      ]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Private authenticated user profile for cloud sync identity",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID matching document ID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name",
+          "maxLength": 150
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified user email address",
+          "maxLength": 150
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp"
+        }
+      },
+      "required": ["uid", "displayName", "email", "createdAt", "updatedAt"]
+    },
+    "Admin": {
+      "title": "Admin",
+      "description": "Authorized clinic manager registry document",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the administrator",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified email address of administrator",
+          "maxLength": 150
+        },
+        "role": {
+          "type": "string",
+          "description": "Administrator role marker",
+          "enum": ["admin"],
+          "maxLength": 20
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp"
+        }
+      },
+      "required": ["uid", "email", "role", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/subscriptions/{subscriptionId}": {
+      "schema": { "$ref": "#/entities/Subscription" },
+      "description": "Subscription accounts synced for Easy clinic manager (no patient PII)"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user profile metadata isolated by UID"
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/Admin" },
+      "description": "Manager/admin role lookup documents"
+    }
+  }
+}

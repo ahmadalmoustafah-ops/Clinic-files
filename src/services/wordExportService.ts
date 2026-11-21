@@ -479,8 +479,9 @@ export async function exportPatientToWord(
       [
         { label: t.patientFullName, value: patient.name },
         { label: t.age, value: patient.age },
-        { label: t.examDateAuto, value: patient.examDate },
         { label: t.residence, value: patient.address },
+        { label: t.pregnancyOrLactation, value: patient.pregnancyOrLactation || '' },
+        { label: t.examDateAuto, value: patient.examDate },
         { label: t.phone, value: patient.phone || '' },
       ],
       isRTL,

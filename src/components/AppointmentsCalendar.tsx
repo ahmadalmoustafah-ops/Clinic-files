@@ -133,17 +133,7 @@ export const AppointmentsCalendar: React.FC<AppointmentsCalendarProps> = ({
     e.preventDefault();
 
     if (!selectedDay) return;
-    if (!appPatientName.trim()) {
-      alert(language === 'ar' ? 'يرجى تحديد أو إدخال اسم المريض.' : 'Please enter or select a patient name.');
-      return;
-    }
-
-    if (appTitle.trim().length < 50) {
-      alert(
-        language === 'ar'
-          ? `تسمية الموعد وملاحظاته يجب ألا تقل عن 50 حرفاً وفق متطلبات العيادة (الحالي: ${appTitle.trim().length} حرفاً). يرجى تفصيل سبب الزيارة أو الفحوصات المطلوبة.`
-          : `Appointment notes must be at least 50 characters (Current: ${appTitle.trim().length} chars). Please elaborate on clinical reasons.`
-      );
+    if (!appPatientName.trim() || !appTitle.trim()) {
       return;
     }
 
@@ -586,15 +576,6 @@ export const AppointmentsCalendar: React.FC<AppointmentsCalendarProps> = ({
                   <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
                     {t.appointmentTitleLabel} <span className="text-rose-500">*</span>
                   </label>
-                  <span
-                    className={`text-[11px] font-mono font-bold px-1.5 py-0.5 rounded ${
-                      appTitle.trim().length >= 50
-                        ? 'text-emerald-700 bg-emerald-50 dark:bg-emerald-950/60 dark:text-emerald-300'
-                        : 'text-amber-700 bg-amber-50 dark:bg-amber-950/60 dark:text-amber-300'
-                    }`}
-                  >
-                    {appTitle.trim().length} / 50 {t.charsMinimum}
-                  </span>
                 </div>
 
                 <textarea
@@ -639,7 +620,7 @@ export const AppointmentsCalendar: React.FC<AppointmentsCalendarProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={appTitle.trim().length < 50 || !appPatientName.trim()}
+                  disabled={!appTitle.trim() || !appPatientName.trim()}
                   className="px-5 py-2 bg-sky-600 hover:bg-sky-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold rounded-xl shadow-xs transition-colors"
                 >
                   {t.saveAppointment}

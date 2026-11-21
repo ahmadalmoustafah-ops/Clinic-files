@@ -10,6 +10,7 @@ import {
   ShieldCheck,
   Type,
   HeartPulse,
+  Bell,
 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 import {
@@ -119,6 +120,13 @@ export const FieldSettingsModal: React.FC<FieldSettingsModalProps> = ({
     onSettingsChange(reset);
   };
 
+  const handleToggleHomeReminder = () => {
+    persist({
+      ...settings,
+      showHomeReminder: !(settings.showHomeReminder !== false),
+    });
+  };
+
   const fontSizeOptions: Array<{ key: AppFontSize; label: string; samplePx: number }> = [
     { key: 'small', label: t.fontSizeSmall, samplePx: APP_FONT_SIZE_PX.small },
     { key: 'medium', label: t.fontSizeMedium, samplePx: APP_FONT_SIZE_PX.medium },
@@ -128,8 +136,9 @@ export const FieldSettingsModal: React.FC<FieldSettingsModalProps> = ({
 
   const demographicItems: Array<{ key: DemographicsSubKey; label: string }> = [
     { key: 'age', label: t.age },
-    { key: 'examDate', label: t.examDateAuto },
     { key: 'address', label: t.residence },
+    { key: 'pregnancyOrLactation', label: t.pregnancyOrLactation },
+    { key: 'examDate', label: t.examDateAuto },
     { key: 'phone', label: t.phone },
   ];
 
@@ -243,6 +252,28 @@ export const FieldSettingsModal: React.FC<FieldSettingsModalProps> = ({
 
             <div className="bg-white/95 dark:bg-slate-900 border border-sky-200/80 dark:border-slate-800 rounded-xl px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 text-center">
               {t.fontSizePreviewSample}
+            </div>
+          </div>
+
+          {/* Home Reminder Notification Toggle */}
+          <div
+            onClick={handleToggleHomeReminder}
+            className="bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/70 rounded-2xl p-3 flex items-center justify-between gap-2.5 cursor-pointer"
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="p-1.5 bg-amber-500 text-white rounded-xl shrink-0">
+                <Bell className="w-4 h-4" />
+              </div>
+              <span className="text-xs font-bold text-amber-950 dark:text-amber-100 leading-snug">
+                {t.settingsHomeReminderLabel}
+              </span>
+            </div>
+            <div onClick={(e) => e.stopPropagation()}>
+              <ToggleSwitch
+                checked={settings.showHomeReminder !== false}
+                onChange={handleToggleHomeReminder}
+                label={t.settingsHomeReminderLabel}
+              />
             </div>
           </div>
 

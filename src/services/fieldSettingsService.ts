@@ -1,6 +1,11 @@
 import { StorageService } from './storageService';
 
-export type DemographicsSubKey = 'age' | 'examDate' | 'address' | 'phone';
+export type DemographicsSubKey =
+  | 'age'
+  | 'examDate'
+  | 'address'
+  | 'pregnancyOrLactation'
+  | 'phone';
 
 export type MainAccordionKey = 'history' | 'clinical' | 'diagnosis';
 
@@ -42,6 +47,7 @@ export type FollowUpSubKey =
 
 export interface ClinicalFieldSettings {
   fontSize: AppFontSize;
+  showHomeReminder: boolean;
   demographics: Record<DemographicsSubKey, boolean>;
   main: Record<MainAccordionKey, boolean>;
   sub: Record<SubAccordionKey, boolean>;
@@ -83,10 +89,12 @@ function readDeviceFontSize(): AppFontSize {
 
 export const DEFAULT_FIELD_SETTINGS: ClinicalFieldSettings = {
   fontSize: 'medium',
+  showHomeReminder: true,
   demographics: {
     age: true,
     examDate: true,
     address: true,
+    pregnancyOrLactation: true,
     phone: true,
   },
   main: {
@@ -126,6 +134,7 @@ export const FIELD_SETTINGS_EVENT = 'easy-clinic-field-settings-changed';
 function cloneDefaults(): ClinicalFieldSettings {
   return {
     fontSize: readDeviceFontSize(),
+    showHomeReminder: true,
     demographics: { ...DEFAULT_FIELD_SETTINGS.demographics },
     main: { ...DEFAULT_FIELD_SETTINGS.main },
     sub: { ...DEFAULT_FIELD_SETTINGS.sub },
@@ -149,6 +158,10 @@ function normalizeSettings(raw: Partial<ClinicalFieldSettings> | null | undefine
 
   if (isValidFontSize(raw.fontSize)) {
     base.fontSize = raw.fontSize;
+  }
+
+  if (typeof raw.showHomeReminder === 'boolean') {
+    base.showHomeReminder = raw.showHomeReminder;
   }
 
   if (raw.demographics && typeof raw.demographics === 'object') {
@@ -229,6 +242,7 @@ export const FieldSettingsService = {
     return this.saveSettings(
       {
         fontSize: 'medium',
+        showHomeReminder: true,
         demographics: { ...DEFAULT_FIELD_SETTINGS.demographics },
         main: { ...DEFAULT_FIELD_SETTINGS.main },
         sub: { ...DEFAULT_FIELD_SETTINGS.sub },

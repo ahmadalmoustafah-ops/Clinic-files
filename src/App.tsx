@@ -25,7 +25,16 @@ import {
   PauseCircle,
   Lock,
   Settings,
+  BellOff,
+  Cloud,
 } from 'lucide-react';
+import {
+  onAuthStateChanged,
+  signInWithPopup,
+  signOut,
+  User as FirebaseUser,
+} from 'firebase/auth';
+import { auth, googleProvider, upsertUserProfile } from './firebase';
 import { PatientRecord, Appointment, ViewMode, UserSession } from './types';
 import { StorageService } from './services/storageService';
 import { AuthService } from './services/authService';
@@ -199,6 +208,63 @@ export default function App() {
     const existing = AuthService.getCurrentSession();
     return existing ? SubscriptionService.getCachedState(existing.id) : DEFAULT_SUB_STATE;
   });
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(auth.currentUser);
+  const [cloudSyncBusy, setCloudSyncBusy] = useState(false);
+
+  useEffect(() => {
+    if (isManagerRoute) return;
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user);
+      if (user && user.emailVerified) {
+        void upsertUserProfile(user).catch((err) => {
+          console.error('User profile upsert error:', err);
+        });
+      }
+    });
+    return () => unsub();
+  }, [isManagerRoute]);
+
+  const handleCloudSyncToggle = async () => {
+    if (cloudSyncBusy) return;
+    const isAr = language === 'ar';
+    if (firebaseUser && firebaseUser.emailVerified) {
+      setCloudSyncBusy(true);
+      try {
+        await signOut(auth);
+        showAppToast(
+          isAr ? 'تم فصل المزامنة السحابية عن هذا الجهاز' : 'Cloud sync disconnected on this device'
+        );
+      } finally {
+        setCloudSyncBusy(false);
+        setIsOptionsMenuOpen(false);
+      }
+      return;
+    }
+
+    setCloudSyncBusy(true);
+    try {
+      const cred = await signInWithPopup(auth, googleProvider);
+      await upsertUserProfile(cred.user);
+      showAppToast(
+        isAr
+          ? 'تم ربط المزامنة السحابية بنجاح عبر Google'
+          : 'Google Cloud Sync connected successfully'
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (!msg.includes('popup-closed-by-user')) {
+        showAppToast(
+          isAr
+            ? 'تعذر ربط حساب Google حالياً، حاول مرة أخرى.'
+            : 'Unable to connect Google Cloud Sync right now.',
+          'warning'
+        );
+      }
+    } finally {
+      setCloudSyncBusy(false);
+      setIsOptionsMenuOpen(false);
+    }
+  };
 
   const toastTimerRef = useRef<number | null>(null);
   const showAppToast = (msg: string, type: 'success' | 'warning' = 'success') => {
@@ -279,58 +345,74 @@ export default function App() {
   const loadingRef = useRef<boolean>(loading);
   loadingRef.current = loading;
 
-  // Sync all locally registered accounts (id + fullName + createdAt + filesCount only — zero patient content)
+  // Sync locally registered accounts to Cloud Firestore when verified Google sync is active (zero patient content)
+  const cloudVerifiedUid = firebaseUser?.emailVerified ? firebaseUser.uid : null;
   useEffect(() => {
     let cancelled = false;
+    let unsubRealtime: (() => void) | null = null;
+
+    if (isManagerRoute || !cloudVerifiedUid) {
+      return () => {
+        cancelled = true;
+      };
+    }
 
     const syncAllWithCounts = async () => {
-      const summaries = AuthService.getAllAccountSummaries();
-      if (!summaries.length) return;
-      const enriched = await Promise.all(
-        summaries.map(async (acc) => ({
-          ...acc,
-          filesCount: await StorageService.getPatientCountForUser(acc.id),
-        }))
-      );
-      if (!cancelled) {
-        await SubscriptionService.syncAllAccounts(enriched);
+      try {
+        const summaries = AuthService.getAllAccountSummaries();
+        if (!summaries.length) return;
+        const enriched = await Promise.all(
+          summaries.map(async (acc) => ({
+            ...acc,
+            filesCount: await StorageService.getPatientCountForUser(acc.id),
+          }))
+        );
+        if (!cancelled) {
+          await SubscriptionService.syncAllAccounts(enriched);
+        }
+      } catch (err) {
+        console.warn('Cloud account batch sync notice:', err);
       }
     };
 
-    syncAllWithCounts();
-    if (isManagerRoute || !currentUser) {
+    if (!currentUser) {
+      void syncAllWithCounts();
       return () => {
         cancelled = true;
       };
     }
 
     const doSync = async () => {
-      await syncAllWithCounts();
-      const filesCount = !loadingRef.current
-        ? patientsCountRef.current
-        : await StorageService.getPatientCountForUser(currentUser.id);
-      const next = await SubscriptionService.syncAccount({
-        id: currentUser.id,
-        fullName: currentUser.fullName,
-        createdAt: currentUser.createdAt,
-        filesCount,
-      });
-      if (!cancelled) {
-        setSubscriptionState(next);
+      try {
+        await syncAllWithCounts();
+        const filesCount = !loadingRef.current
+          ? patientsCountRef.current
+          : await StorageService.getPatientCountForUser(currentUser.id);
+        const next = await SubscriptionService.syncAccount({
+          id: currentUser.id,
+          fullName: currentUser.fullName,
+          createdAt: currentUser.createdAt,
+          filesCount,
+        });
+        if (!cancelled) {
+          setSubscriptionState(next);
+        }
+      } catch (err) {
+        console.warn('Cloud subscription sync notice:', err);
       }
     };
 
-    doSync();
+    void doSync();
 
-    const intervalId = window.setInterval(() => {
-      if (navigator.onLine) {
-        doSync();
+    unsubRealtime = SubscriptionService.subscribeToAccount(currentUser.id, (next) => {
+      if (!cancelled) {
+        setSubscriptionState(next);
       }
-    }, 20000);
+    });
 
     const onWake = () => {
       if (document.visibilityState === 'visible' && navigator.onLine) {
-        doSync();
+        void doSync();
       }
     };
 
@@ -340,23 +422,25 @@ export default function App() {
 
     return () => {
       cancelled = true;
-      window.clearInterval(intervalId);
+      if (unsubRealtime) unsubRealtime();
       window.removeEventListener('focus', doSync);
       window.removeEventListener('online', doSync);
       document.removeEventListener('visibilitychange', onWake);
     };
-  }, [currentUser?.id, currentUser?.fullName, currentUser?.createdAt, isManagerRoute]);
+  }, [currentUser?.id, currentUser?.fullName, currentUser?.createdAt, isManagerRoute, cloudVerifiedUid]);
 
-  // Immediately update server filesCount whenever the active user's patient file count changes after initial load
+  // Immediately update Cloud Firestore filesCount whenever the active user's patient file count changes after initial load
   useEffect(() => {
-    if (isManagerRoute || !currentUser || loading) return;
-    SubscriptionService.syncAccount({
+    if (isManagerRoute || !currentUser || loading || !cloudVerifiedUid) return;
+    void SubscriptionService.syncAccount({
       id: currentUser.id,
       fullName: currentUser.fullName,
       createdAt: currentUser.createdAt,
       filesCount: patients.length,
+    }).catch((err) => {
+      console.warn('Cloud file count sync notice:', err);
     });
-  }, [patients.length, loading, currentUser?.id, currentUser?.fullName, currentUser?.createdAt, isManagerRoute]);
+  }, [patients.length, loading, currentUser?.id, currentUser?.fullName, currentUser?.createdAt, isManagerRoute, cloudVerifiedUid]);
 
   // Scheduled once-daily automatic backup at 4:00 PM (16:00 local time)
   const isRunningAutoBackupRef = useRef(false);
@@ -803,7 +887,38 @@ export default function App() {
                       <span className="font-bold">{t.toggleLanguage}</span>
                     </button>
 
-                    {/* Option 4: PWA Install Button */}
+                    {/* Option 4: Google Cloud Sync (المزامنة السحابية) */}
+                    <button
+                      onClick={() => void handleCloudSyncToggle()}
+                      disabled={cloudSyncBusy}
+                      className="w-full px-4 py-3 text-xs text-slate-800 dark:text-slate-200 hover:bg-sky-50 dark:hover:bg-sky-950/60 flex items-center gap-3 transition-colors cursor-pointer text-start border-t border-slate-100 dark:border-slate-800/60 disabled:opacity-60"
+                    >
+                      <div
+                        className={`p-1.5 rounded-xl shrink-0 ${
+                          firebaseUser?.emailVerified
+                            ? 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-400'
+                            : 'bg-sky-100 dark:bg-sky-900/60 text-sky-600 dark:text-sky-400'
+                        }`}
+                      >
+                        <Cloud className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <span className="font-bold block">
+                          {language === 'ar'
+                            ? 'المزامنة السحابية (Google)'
+                            : 'Cloud Sync (Google)'}
+                        </span>
+                        <span className="text-[10px] text-slate-500 dark:text-slate-400 block truncate" dir="ltr">
+                          {firebaseUser?.emailVerified
+                            ? `${firebaseUser.email} ✓`
+                            : language === 'ar'
+                            ? 'اضغط لتفعيل مزامنة حالة الاشتراك'
+                            : 'Tap to connect subscription sync'}
+                        </span>
+                      </div>
+                    </button>
+
+                    {/* Option 5: PWA Install Button */}
                     <div className="px-3">
                       <PWAInstallButton />
                     </div>
@@ -874,34 +989,6 @@ export default function App() {
               </div>
             )}
 
-            {/* 0.A DIRECT CLIENT MESSAGE FROM MANAGER IN YELLOW RECTANGLE */}
-            {subscriptionState.adminMessage && (
-              <div className="bg-yellow-100 dark:bg-amber-950/60 border-2 border-yellow-400 dark:border-amber-500 text-amber-950 dark:text-amber-100 rounded-2xl p-4 shadow-sm animate-in fade-in duration-200">
-                <div className="flex items-start gap-3">
-                  <div className="p-2 bg-yellow-300/80 dark:bg-amber-800/70 text-amber-950 dark:text-amber-100 rounded-xl shrink-0">
-                    <MessageSquareText className="w-4 h-4" />
-                  </div>
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <span className="text-xs font-extrabold text-amber-950 dark:text-amber-200">
-                        {t.managerMessageTitle}
-                      </span>
-                      {subscriptionState.adminMessageUpdatedAt && (
-                        <span className="text-[10px] text-amber-800/80 dark:text-amber-300/80 font-mono">
-                          {new Date(subscriptionState.adminMessageUpdatedAt).toLocaleDateString(
-                            language === 'ar' ? 'ar-EG' : 'en-US'
-                          )}
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs font-semibold leading-relaxed whitespace-pre-wrap text-amber-950 dark:text-amber-100">
-                      {subscriptionState.adminMessage}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-
             {/* 0.B TEMPORARY SUSPENSION NOTICE (Blocks new files, allows editing stored files & follow-ups) */}
             {isAccountSuspended && (
               <div className="bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 text-rose-900 dark:text-rose-200 rounded-2xl p-3.5 flex items-start gap-3 shadow-xs">
@@ -931,17 +1018,45 @@ export default function App() {
               />
             </div>
 
+            {/* 1.A DIRECT CLIENT MESSAGE FROM MANAGER IN YELLOW RECTANGLE (Below Smart Search Bar) */}
+            {subscriptionState.adminMessage && (
+              <div className="bg-yellow-100 dark:bg-amber-950/60 border-2 border-yellow-400 dark:border-amber-500 text-amber-950 dark:text-amber-100 rounded-2xl p-4 shadow-sm animate-in fade-in duration-200">
+                <div className="flex items-start gap-3">
+                  <div className="p-2 bg-yellow-300/80 dark:bg-amber-800/70 text-amber-950 dark:text-amber-100 rounded-xl shrink-0">
+                    <MessageSquareText className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-xs font-extrabold text-amber-950 dark:text-amber-200">
+                        {t.managerMessageTitle}
+                      </span>
+                      {subscriptionState.adminMessageUpdatedAt && (
+                        <span className="text-[10px] text-amber-800/80 dark:text-amber-300/80 font-mono">
+                          {new Date(subscriptionState.adminMessageUpdatedAt).toLocaleDateString(
+                            language === 'ar' ? 'ar-EG' : 'en-US'
+                          )}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs font-semibold leading-relaxed whitespace-pre-wrap text-amber-950 dark:text-amber-100">
+                      {subscriptionState.adminMessage}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* 2. ADVANCE REMINDER BANNER FOR TOMORROW'S APPOINTMENTS */}
-            {tomorrowAppointments.length > 0 && (
+            {tomorrowAppointments.length > 0 && fieldSettings.showHomeReminder !== false && (
               <div
                 onClick={() => setViewMode('calendar')}
-                className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 rounded-2xl p-3.5 flex items-center justify-between gap-3 cursor-pointer hover:bg-amber-100/60 transition-colors shadow-xs animate-in fade-in-50"
+                className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 rounded-2xl p-3.5 flex items-center justify-between gap-2.5 cursor-pointer hover:bg-amber-100/60 transition-colors shadow-xs animate-in fade-in-50"
               >
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-amber-100 dark:bg-amber-900/70 text-amber-700 dark:text-amber-300 rounded-xl">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="p-2 bg-amber-100 dark:bg-amber-900/70 text-amber-700 dark:text-amber-300 rounded-xl shrink-0">
                     <Bell className="w-4 h-4 animate-bounce" />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <h3 className="text-xs font-bold text-amber-950 dark:text-amber-200">
                       {t.reminderAlertTitle.replace('{count}', String(tomorrowAppointments.length))}
                     </h3>
@@ -950,7 +1065,26 @@ export default function App() {
                     </p>
                   </div>
                 </div>
-                <ChevronIcon className="w-4 h-4 text-amber-600" />
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const next = FieldSettingsService.saveSettings({
+                        ...fieldSettings,
+                        showHomeReminder: false,
+                      });
+                      setFieldSettings(next);
+                      showAppToast(t.homeReminderHiddenToast);
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-amber-200/80 hover:bg-amber-300 dark:bg-amber-900/70 dark:hover:bg-amber-800 text-amber-950 dark:text-amber-100 rounded-xl text-[11px] font-extrabold transition-colors cursor-pointer"
+                    title={t.hideHomeReminderBtn}
+                  >
+                    <BellOff className="w-3.5 h-3.5" />
+                    <span>{t.hideHomeReminderBtn}</span>
+                  </button>
+                  <ChevronIcon className="w-4 h-4 text-amber-600" />
+                </div>
               </div>
             )}
 
